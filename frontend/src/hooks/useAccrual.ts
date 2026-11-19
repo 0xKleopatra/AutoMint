@@ -20,7 +20,7 @@ import type { AccrualState, UserProfile } from "@/types";
 import { pollWhenVisible } from "@/lib/polling";
 import { STALE_TIME, GC_TIME, qk, DASHBOARD_POLL_MS } from "@/lib/queryKeys";
 import { trackStatus, newTxId } from "@/components/ui/TxStatus";
-import { COUNTER_TICK_MS } from "@/lib/constants";
+import { CONTRACT_ADDRESSES, COUNTER_TICK_MS } from "@/lib/constants";
 import { toastContractError } from "@/lib/errors";
 
 const POINTS_PER_HOUR_DIVISOR = 3600; // Seconds in an hour
@@ -63,9 +63,9 @@ export function useRegister() {
       if (!publicKey) throw new Error("Wallet not connected");
       setProgress(null);
 
-      const REGISTRY_CONTRACT_ID = process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ID || "";
-      const BOT_NFT_CONTRACT_ID = process.env.NEXT_PUBLIC_BOT_NFT_CONTRACT_ID || "";
-      const ACCRUAL_CONTRACT_ID = process.env.NEXT_PUBLIC_ACCRUAL_CONTRACT_ID || "";
+      const REGISTRY_CONTRACT_ID = CONTRACT_ADDRESSES.registry;
+      const BOT_NFT_CONTRACT_ID = CONTRACT_ADDRESSES.botNft;
+      const ACCRUAL_CONTRACT_ID = CONTRACT_ADDRESSES.accrual;
 
       // Resume detection (#452): read the three on-chain facts in parallel
       // and only run the steps that have not landed yet. A registration
@@ -418,9 +418,9 @@ export function useClaim() {
     mutationFn: async () => {
       if (!publicKey) throw new Error("Wallet not connected");
 
-      const ACCRUAL_CONTRACT_ID = process.env.NEXT_PUBLIC_ACCRUAL_CONTRACT_ID || "";
-      const TOKEN_CONTRACT_ID = process.env.NEXT_PUBLIC_TOKEN_CONTRACT_ID || "";
-      const REGISTRY_CONTRACT_ID = process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ID || "";
+      const ACCRUAL_CONTRACT_ID = CONTRACT_ADDRESSES.accrual;
+      const TOKEN_CONTRACT_ID = CONTRACT_ADDRESSES.token;
+      const REGISTRY_CONTRACT_ID = CONTRACT_ADDRESSES.registry;
       const txId = newTxId("claim");
 
       return new Promise((resolve, reject) => {

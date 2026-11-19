@@ -644,11 +644,25 @@ impl AccrualContract {
     pub fn claim(
         env: Env,
         user: Address,
-        token_contract: Address,
-        registry: Address,
+        _token_contract: Address,
+        _registry: Address,
     ) -> Result<i128, AccrualError> {
+        // #1320: the real token/registry are stored at initialization. Never
+        // trust caller-supplied addresses — a stub would advance counters and
+        // emit a mint event without touching the real contracts. The parameter
+        // names are kept (underscored) for ABI/client compatibility.
         user.require_auth();
         require_unfrozen(&env, &user)?;
+        let token_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(AccrualError::NotInitialized)?;
+        let registry: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Registry)
+            .ok_or(AccrualError::NotInitialized)?;
 
         if env.storage().temporary().has(&DataKey::ReentrancyGuard) {
             return Ok(0);
@@ -830,8 +844,17 @@ impl AccrualContract {
     /// Auth: `user.require_auth()`.
     ///
     /// Errors: `NotStarted` when the user has no accrual record.
-    pub fn stop_accrual(env: Env, user: Address, registry: Address) -> Result<(), AccrualError> {
+    pub fn stop_accrual(env: Env, user: Address, _registry: Address) -> Result<(), AccrualError> {
+        // #1321: use the stored registry and block frozen users, matching
+        // claim()/start_accrual(). The registry parameter is kept (underscored)
+        // for ABI/client compatibility.
         user.require_auth();
+        require_unfrozen(&env, &user)?;
+        let registry: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Registry)
+            .ok_or(AccrualError::NotInitialized)?;
         let mut accrual: UserAccrual = env
             .storage()
             .persistent()

@@ -12,6 +12,7 @@ import {
   rpcCall,
   getServer,
   signTx,
+  invalidateReadCaches,
   TxSendFailedError,
   TxFailedError,
   TxTimeoutError,
@@ -242,6 +243,10 @@ async function pollSubmitted(
     }
 
     if (status === "SUCCESS") {
+      // #1319: executeTransaction also submits via the hooks; a confirmed tx
+      // changes sequence/balances/contract state, so drop cached reads here
+      // too (submitTx in stellar.ts already does this) to avoid stale refetch.
+      invalidateReadCaches();
       useTxStore.getState().resolveTransaction(hash, "success");
       const ret = (getRes as unknown as { returnValue?: xdr.ScVal }).returnValue;
       let result: unknown = undefined;
@@ -256,6 +261,8 @@ async function pollSubmitted(
     }
 
     if (status === "FAILED") {
+      // #1319: FAILED is also confirmed and consumes the sequence number.
+      invalidateReadCaches();
       const diag =
         (getRes as unknown as { resultXdr?: string }).resultXdr ??
         (getRes as unknown as { errorResultXdr?: string }).errorResultXdr;
