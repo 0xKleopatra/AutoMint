@@ -77,45 +77,8 @@ pub enum DataKey {
     Initialized,
     // Authorized writer set (accrual + bot_nft) for #318 gating.
     Writers,
-    /// Addresses registered in page order, with `USER_LIST_PAGE_SIZE` entries
-    /// per page.
-    UserListPage(u32),
-    /// Number of allocated `UserListPage` entries.
-    UserListPageCount,
 }
 
-fn append_user_to_list(env: &Env, user: &Address) -> Result<(), RegistryError> {
-    let page_count: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::UserListPageCount)
-        .unwrap_or(0);
-    let page_index = page_count.saturating_sub(1);
-    let mut page: Vec<Address> = if page_count == 0 {
-        Vec::new(env)
-    } else {
-        env.storage()
-            .instance()
-            .get(&DataKey::UserListPage(page_index))
-            .unwrap_or_else(|| Vec::new(env))
-    };
-    let page_index = if page_count == 0 || page.len() >= USER_LIST_PAGE_SIZE {
-        let new_page_index = page_count;
-        let next_page_count = page_count.checked_add(1).ok_or(RegistryError::Overflow)?;
-        page = Vec::new(env);
-        env.storage()
-            .instance()
-            .set(&DataKey::UserListPageCount, &next_page_count);
-        new_page_index
-    } else {
-        page_index
-    };
-    page.push_back(user.clone());
-    env.storage()
-        .instance()
-        .set(&DataKey::UserListPage(page_index), &page);
-    Ok(())
-}
 
 // #39: Define UserProfile struct
 /// Per-user profile stored in persistent storage.
@@ -388,7 +351,6 @@ impl RegistryContract {
         };
 
         Self::persist_profile(&env, &user, &profile);
-        append_user_to_list(&env, &user)?;
 
         // Store username mapping (lowercased key)
         env.storage()
@@ -704,7 +666,8 @@ impl RegistryContract {
     }
 
     /// Admin-only: overwrite a registered user's lifetime points with
-    /// `value` and refresh the lifetime leaderboard. Emits `setpts`.
+    /// `value` and refresh both the lifetime and current-season leaderboards.
+    /// Emits `setpts`.
     ///
     /// Auth: admin only.
     ///
@@ -724,6 +687,18 @@ impl RegistryContract {
         profile.total_points = value;
         Self::persist_profile(&env, &user, &profile);
         Self::update_top(&env, &user, profile.total_points);
+
+        // #371: also update the current season's total so the season
+        // leaderboard stays in sync with lifetime points. Season entries
+        // are persistent per-user records with their own TTL.
+        let season = Self::current_season(&env);
+        let season_key = DataKey::SeasonPoints(season, user.clone());
+        env.storage().persistent().set(&season_key, &value);
+        env.storage()
+            .persistent()
+            .extend_ttl(&season_key, LEDGER_THRESHOLD, LEDGER_BUMP);
+        Self::update_season_top(&env, season, &user, value);
+
         env.events().publish((symbol_short!("setpts"), user), value);
         Ok(())
     }
@@ -1106,19 +1081,15 @@ impl RegistryContract {
     /// repairs the cached count. Safe to call repeatedly.
     pub fn verify_user_count(env: Env) -> Result<u32, RegistryError> {
         let mut count = 0_u32;
-        let page_count: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::UserListPageCount)
-            .unwrap_or(0);
+        let page_count = Self::page_count(&env);
         for page_index in 0..page_count {
-            let page: Vec<Address> = env
-                .storage()
-                .instance()
-                .get(&DataKey::UserListPage(page_index))
-                .unwrap_or_else(|| Vec::new(&env));
+            let page = Self::page_users(&env, page_index);
             for user in page.iter() {
-                if env.storage().persistent().has(&DataKey::UserProfile(user)) {
+                if env
+                    .storage()
+                    .persistent()
+                    .has(&DataKey::UserProfile(user))
+                {
                     count = count.checked_add(1).ok_or(RegistryError::Overflow)?;
                 }
             }
@@ -1139,18 +1110,10 @@ impl RegistryContract {
 
     /// Counts profiles registered at or after `timestamp`.
     pub fn users_since(env: Env, timestamp: u64) -> u32 {
-        let page_count: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::UserListPageCount)
-            .unwrap_or(0);
+        let page_count = Self::page_count(&env);
         let mut count = 0_u32;
         for page_index in 0..page_count {
-            let page: Vec<Address> = env
-                .storage()
-                .instance()
-                .get(&DataKey::UserListPage(page_index))
-                .unwrap_or_else(|| Vec::new(&env));
+            let page = Self::page_users(&env, page_index);
             for user in page.iter() {
                 if let Some(profile) = env
                     .storage()
