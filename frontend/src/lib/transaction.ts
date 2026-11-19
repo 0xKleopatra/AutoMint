@@ -1,4 +1,5 @@
 import { Contract, TransactionBuilder, scValToNative, xdr, rpc } from "@stellar/stellar-sdk";
+import { toast } from "sonner";
 import {
   BASE_FEE,
   POLL_INTERVAL_MS,
@@ -565,4 +566,83 @@ export async function resumePendingTransactions(): Promise<void> {
  */
 export function __resetSequenceStateForTests(): void {
   sequenceState.clear();
+}
+
+/**
+ * Parameters for runTxWithToasts.
+ */
+export interface RunTxWithToastsParams {
+  contractId: string;
+  method: string;
+  args: xdr.ScVal[];
+  sourceAddress: string;
+  id: string;
+  label: string;
+  successMessage?: string;
+}
+
+/**
+ * Execute a transaction with automatic toast notifications for each stage.
+ *
+ * Maps transaction stages to toast messages:
+ * - building/simulating/assembling → "Preparing {label} transaction..."
+ * - signing → "Waiting for wallet signature..."
+ * - submitting → "Submitting {label} to blockchain..."
+ * - polling → "Confirming on-chain... ({hash})"
+ * - success → "{successMessage}" with explorer link action
+ *
+ * Errors are intentionally NOT shown here to avoid duplication with the
+ * mutation's onError handler, which calls toastContractError.
+ *
+ * @param params transaction parameters and labels
+ * @returns promise that resolves when the transaction succeeds
+ * @throws when the transaction fails (error toast is shown by onError)
+ */
+export function runTxWithToasts(params: RunTxWithToastsParams): Promise<TransactionStatus> {
+  const { contractId, method, args, sourceAddress, id, label, successMessage } = params;
+
+  return new Promise((resolve, reject) => {
+    executeTransaction({
+      contractId,
+      method,
+      args,
+      sourceAddress,
+      onStatus: (status: TransactionStatus) => {
+        switch (status.stage) {
+          case "building":
+          case "simulating":
+          case "assembling":
+            toast.loading(`Preparing ${label} transaction...`, { id });
+            break;
+          case "signing":
+            toast.loading("Waiting for wallet signature...", { id });
+            break;
+          case "submitting":
+            toast.loading(`Submitting ${label} to blockchain...`, { id });
+            break;
+          case "polling":
+            toast.loading(
+              `Confirming on-chain... (${status.hash?.slice(0, 8)})`,
+              { id },
+            );
+            break;
+          case "success":
+            toast.success(successMessage || `${label} successful!`, {
+              id,
+              action: status.explorerUrl
+                ? {
+                    label: "View",
+                    onClick: () => window.open(status.explorerUrl, "_blank"),
+                  }
+                : undefined,
+            });
+            resolve(status);
+            break;
+          case "error":
+            reject(new Error(status.error || `${label} failed`));
+            break;
+        }
+      },
+    }).catch(reject);
+  });
 }

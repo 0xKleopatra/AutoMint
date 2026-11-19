@@ -46,6 +46,7 @@ pub struct AccrualState {
     pub lifetime_points: u64,
     pub rate: u64,
     pub started_at: u64,
+    pub leftover: u64,
 }
 
 #[derive(Clone)]
@@ -106,6 +107,7 @@ impl From<UserAccrual> for AccrualState {
             lifetime_points: a.lifetime_points,
             rate: a.rate,
             started_at: a.started_at,
+            leftover: a.leftover,
         }
     }
 }
@@ -475,7 +477,7 @@ impl AccrualContract {
 
     /// Seconds until the next AMT token will be earned. Returns 0 if the user
     /// already has enough carry points for the next token or if their rate is 0.
-    /// Computed from carry_points, points_per_amt, and accrual rate.
+    /// Computed from carry_points, pending points, points_per_amt, and accrual rate.
     pub fn seconds_to_next_amt(env: Env, user: Address) -> Result<u64, AccrualError> {
         let accrual: UserAccrual = env
             .storage()
@@ -493,7 +495,14 @@ impl AccrualContract {
             return Ok(0);
         }
 
-        let points_needed = config.points_per_amt.saturating_sub(accrual.carry_points);
+        let elapsed = env
+            .ledger()
+            .timestamp()
+            .saturating_sub(accrual.last_claim_ts);
+        let pending = (elapsed.saturating_mul(accrual.rate) + accrual.leftover) / 3600;
+        let total_points = accrual.carry_points.saturating_add(pending);
+
+        let points_needed = config.points_per_amt.saturating_sub(total_points);
 
         if points_needed == 0 {
             return Ok(0);

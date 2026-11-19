@@ -6,7 +6,7 @@ import {
   getMarketStats,
   buildListBotArgs,
 } from "@/lib/contracts";
-import { executeTransaction, type TransactionStatus } from "@/lib/transaction";
+import { executeTransaction, runTxWithToasts, type TransactionStatus } from "@/lib/transaction";
 import { useWalletStore, selectPublicKey } from "@/store/walletStore";
 import { nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import type { Tier, MarketplaceListing } from "@/types";
@@ -26,54 +26,18 @@ export function useBuyBot() {
     mutationFn: async (listingId: bigint) => {
       if (!publicKey) throw new Error("Wallet not connected");
 
-      const MARKETPLACE_CONTRACT_ID = CONTRACT_ADDRESSES.marketplace;
       const txId = newTxId("buy_bot");
-
-      return new Promise((resolve, reject) => {
-        executeTransaction({
-          contractId: MARKETPLACE_CONTRACT_ID,
-          method: "buy_bot",
-          args: [nativeToScVal(listingId, { type: "u128" })],
-          sourceAddress: publicKey,
-          onStatus: (status: TransactionStatus) => {
-            trackStatus(txId, "Purchase", status);
-            switch (status.stage) {
-              case "building":
-              case "simulating":
-              case "assembling":
-                toast.loading("Preparing purchase transaction...", { id: "buy_bot" });
-                break;
-              case "signing":
-                toast.loading("Waiting for wallet signature...", { id: "buy_bot" });
-                break;
-              case "submitting":
-                toast.loading("Submitting purchase to blockchain...", { id: "buy_bot" });
-                break;
-              case "polling":
-                toast.loading(
-                  `Confirming on-chain... (${status.hash?.slice(0, 8)})`,
-                  { id: "buy_bot" }
-                );
-                break;
-              case "success":
-                toast.success("Bot purchased successfully!", {
-                  id: "buy_bot",
-                  action: status.explorerUrl
-                    ? {
-                        label: "View",
-                        onClick: () => window.open(status.explorerUrl, "_blank"),
-                      }
-                    : undefined,
-                });
-                resolve(status);
-                break;
-              case "error":
-                reject(new Error(status.error || "Purchase failed"));
-                break;
-            }
-          },
-        }).catch(reject);
+      const status = await runTxWithToasts({
+        contractId: CONTRACT_ADDRESSES.marketplace,
+        method: "buy_bot",
+        args: [nativeToScVal(listingId, { type: "u128" })],
+        sourceAddress: publicKey,
+        id: "buy_bot",
+        label: "purchase",
+        successMessage: "Bot purchased successfully!",
       });
+      trackStatus(txId, "Purchase", status);
+      return status;
     },
     onMutate: async (listingId: bigint) => {
       // Optimistic update (#462): drop the bought listing immediately.
@@ -116,55 +80,18 @@ export function useMintTierBot() {
     mutationFn: async ({ tier, token }: { tier: Tier; token: string }) => {
       if (!publicKey) throw new Error("Wallet not connected");
 
-      const BOT_NFT_CONTRACT_ID = CONTRACT_ADDRESSES.botNft;
-
-      return new Promise((resolve, reject) => {
-        executeTransaction({
-          contractId: BOT_NFT_CONTRACT_ID,
-          method: "mint_tier",
-          args: [
-            nativeToScVal(publicKey, { type: "address" }),
-            xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(tier)]),
-            nativeToScVal(token, { type: "address" }),
-          ],
-          sourceAddress: publicKey,
-          onStatus: (status: TransactionStatus) => {
-            switch (status.stage) {
-              case "building":
-              case "simulating":
-              case "assembling":
-                toast.loading("Preparing mint transaction...", { id: "mint_tier" });
-                break;
-              case "signing":
-                toast.loading("Waiting for wallet signature...", { id: "mint_tier" });
-                break;
-              case "submitting":
-                toast.loading("Submitting mint to blockchain...", { id: "mint_tier" });
-                break;
-              case "polling":
-                toast.loading(
-                  `Confirming on-chain... (${status.hash?.slice(0, 8)})`,
-                  { id: "mint_tier" }
-                );
-                break;
-              case "success":
-                toast.success("Tier bot minted successfully!", {
-                  id: "mint_tier",
-                  action: status.explorerUrl
-                    ? {
-                        label: "View",
-                        onClick: () => window.open(status.explorerUrl, "_blank"),
-                      }
-                    : undefined,
-                });
-                resolve(status);
-                break;
-              case "error":
-                reject(new Error(status.error || "Mint failed"));
-                break;
-            }
-          },
-        }).catch(reject);
+      return runTxWithToasts({
+        contractId: CONTRACT_ADDRESSES.botNft,
+        method: "mint_tier",
+        args: [
+          nativeToScVal(publicKey, { type: "address" }),
+          xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(tier)]),
+          nativeToScVal(token, { type: "address" }),
+        ],
+        sourceAddress: publicKey,
+        id: "mint_tier",
+        label: "mint",
+        successMessage: "Tier bot minted successfully!",
       });
     },
     onSuccess: () => {
@@ -221,59 +148,21 @@ export function useListBot() {
     mutationFn: async ({ botId, price }: { botId: bigint; price: bigint }) => {
       if (!publicKey) throw new Error("Wallet not connected");
 
-      const MARKETPLACE_CONTRACT_ID = CONTRACT_ADDRESSES.marketplace;
       const txId = newTxId("list_bot");
-
-      return new Promise((resolve, reject) => {
-        executeTransaction({
-          contractId: MARKETPLACE_CONTRACT_ID,
-          method: "list_bot",
-          // list_bot(seller, bot_id, price, currency): the connected wallet is
-          // the seller whose auth the contract requires; currency is the
-          // configured payment token.
-          args: buildListBotArgs(publicKey, botId, price),
-          sourceAddress: publicKey,
-          onStatus: (status: TransactionStatus) => {
-            trackStatus(txId, "Listing", status);
-            switch (status.stage) {
-              case "building":
-              case "simulating":
-              case "assembling":
-                toast.loading("Preparing listing transaction...", { id: "list_bot" });
-                break;
-              case "signing":
-                toast.loading("Waiting for wallet signature...", { id: "list_bot" });
-                break;
-              case "submitting":
-                toast.loading("Submitting listing to blockchain...", {
-                  id: "list_bot",
-                });
-                break;
-              case "polling":
-                toast.loading(
-                  `Confirming on-chain... (${status.hash?.slice(0, 8)})`,
-                  { id: "list_bot" }
-                );
-                break;
-              case "success":
-                toast.success("Bot listed successfully!", {
-                  id: "list_bot",
-                  action: status.explorerUrl
-                    ? {
-                        label: "View",
-                        onClick: () => window.open(status.explorerUrl, "_blank"),
-                      }
-                    : undefined,
-                });
-                resolve(status);
-                break;
-              case "error":
-                reject(new Error(status.error || "Listing failed"));
-                break;
-            }
-          },
-        }).catch(reject);
+      const status = await runTxWithToasts({
+        contractId: CONTRACT_ADDRESSES.marketplace,
+        method: "list_bot",
+        // list_bot(seller, bot_id, price, currency): the connected wallet is
+        // the seller whose auth the contract requires; currency is the
+        // configured payment token.
+        args: buildListBotArgs(publicKey, botId, price),
+        sourceAddress: publicKey,
+        id: "list_bot",
+        label: "listing",
+        successMessage: "Bot listed successfully!",
       });
+      trackStatus(txId, "Listing", status);
+      return status;
     },
     onMutate: async ({ botId }: { botId: bigint; price: bigint }) => {
       // Optimistic update (#462): remove the bot from the owned list.
@@ -320,56 +209,18 @@ export function useCancelListing() {
     mutationFn: async (listingId: bigint) => {
       if (!publicKey) throw new Error("Wallet not connected");
 
-      const MARKETPLACE_CONTRACT_ID = CONTRACT_ADDRESSES.marketplace;
       const txId = newTxId("cancel_listing");
-
-      return new Promise((resolve, reject) => {
-        executeTransaction({
-          contractId: MARKETPLACE_CONTRACT_ID,
-          method: "cancel_listing",
-          args: [nativeToScVal(listingId, { type: "u128" })],
-          sourceAddress: publicKey,
-          onStatus: (status: TransactionStatus) => {
-            trackStatus(txId, "Cancellation", status);
-            switch (status.stage) {
-              case "building":
-              case "simulating":
-              case "assembling":
-                toast.loading("Preparing cancel transaction...", { id: "cancel_listing" });
-                break;
-              case "signing":
-                toast.loading("Waiting for wallet signature...", { id: "cancel_listing" });
-                break;
-              case "submitting":
-                toast.loading("Submitting cancellation to blockchain...", {
-                  id: "cancel_listing",
-                });
-                break;
-              case "polling":
-                toast.loading(
-                  `Confirming on-chain... (${status.hash?.slice(0, 8)})`,
-                  { id: "cancel_listing" }
-                );
-                break;
-              case "success":
-                toast.success("Listing cancelled successfully!", {
-                  id: "cancel_listing",
-                  action: status.explorerUrl
-                    ? {
-                        label: "View",
-                        onClick: () => window.open(status.explorerUrl, "_blank"),
-                      }
-                    : undefined,
-                });
-                resolve(status);
-                break;
-              case "error":
-                reject(new Error(status.error || "Cancellation failed"));
-                break;
-            }
-          },
-        }).catch(reject);
+      const status = await runTxWithToasts({
+        contractId: CONTRACT_ADDRESSES.marketplace,
+        method: "cancel_listing",
+        args: [nativeToScVal(listingId, { type: "u128" })],
+        sourceAddress: publicKey,
+        id: "cancel_listing",
+        label: "cancellation",
+        successMessage: "Listing cancelled successfully!",
       });
+      trackStatus(txId, "Cancellation", status);
+      return status;
     },
     onMutate: async (listingId: bigint) => {
       // Optimistic update (#462): drop the cancelled listing immediately.
