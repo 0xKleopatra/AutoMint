@@ -15,6 +15,7 @@ import { STALE_TIME, GC_TIME, qk } from "@/lib/queryKeys";
 import { trackStatus, newTxId } from "@/components/ui/TxStatus";
 import type { DashboardData } from "./useAccrual";
 import { toastContractError } from "@/lib/errors";
+import { CONTRACT_ADDRESSES } from "@/lib/constants";
 export { useProfiles } from "./useProfiles";
 
 export function useBuyBot() {
@@ -25,7 +26,7 @@ export function useBuyBot() {
     mutationFn: async (listingId: bigint) => {
       if (!publicKey) throw new Error("Wallet not connected");
 
-      const MARKETPLACE_CONTRACT_ID = process.env.NEXT_PUBLIC_MARKETPLACE_CONTRACT_ID || "";
+      const MARKETPLACE_CONTRACT_ID = CONTRACT_ADDRESSES.marketplace;
       const txId = newTxId("buy_bot");
 
       return new Promise((resolve, reject) => {
@@ -115,7 +116,7 @@ export function useMintTierBot() {
     mutationFn: async ({ tier, token }: { tier: Tier; token: string }) => {
       if (!publicKey) throw new Error("Wallet not connected");
 
-      const BOT_NFT_CONTRACT_ID = process.env.NEXT_PUBLIC_BOT_NFT_CONTRACT_ID || "";
+      const BOT_NFT_CONTRACT_ID = CONTRACT_ADDRESSES.botNft;
 
       return new Promise((resolve, reject) => {
         executeTransaction({
@@ -220,7 +221,7 @@ export function useListBot() {
     mutationFn: async ({ botId, price }: { botId: bigint; price: bigint }) => {
       if (!publicKey) throw new Error("Wallet not connected");
 
-      const MARKETPLACE_CONTRACT_ID = process.env.NEXT_PUBLIC_MARKETPLACE_CONTRACT_ID || "";
+      const MARKETPLACE_CONTRACT_ID = CONTRACT_ADDRESSES.marketplace;
       const txId = newTxId("list_bot");
 
       return new Promise((resolve, reject) => {
@@ -319,7 +320,7 @@ export function useCancelListing() {
     mutationFn: async (listingId: bigint) => {
       if (!publicKey) throw new Error("Wallet not connected");
 
-      const MARKETPLACE_CONTRACT_ID = process.env.NEXT_PUBLIC_MARKETPLACE_CONTRACT_ID || "";
+      const MARKETPLACE_CONTRACT_ID = CONTRACT_ADDRESSES.marketplace;
       const txId = newTxId("cancel_listing");
 
       return new Promise((resolve, reject) => {
