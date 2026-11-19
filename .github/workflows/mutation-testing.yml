@@ -29,8 +29,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Must match rust-toolchain.toml so cargo-mutants builds and tests with
+      # the pinned rustc instead of a second, floating `stable` toolchain.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.95.0
 
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@v4

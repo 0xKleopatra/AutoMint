@@ -2,9 +2,9 @@ name: Security Scanning
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "testnet-implementation", "main" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "testnet-implementation", "main" ]
   schedule:
     - cron: '0 0 * * 0' # Weekly on Sundays
 
