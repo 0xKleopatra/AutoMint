@@ -480,6 +480,12 @@ verify_contract marketplace
 # 3b. Wire the Accrual contract as the Token's admin so claims can mint AMT.
 wire_token_admin
 
+# 3c. Configure the authorized writers and marketplace address (#1342).
+init_contract registry set_writers --accrual "$(resolve_id accrual)" \
+  --bot-nft "$(resolve_id bot_nft)"
+init_contract bot_nft set_marketplace --marketplace "$(resolve_id marketplace)"
+init_contract marketplace add_allowed_currency --currency "$(resolve_id token)"
+
 # 4. Refresh frontend env from the manifest (resumed runs re-sync .env.local).
 write_env_local
 
