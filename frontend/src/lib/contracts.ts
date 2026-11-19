@@ -43,15 +43,12 @@ import type { BotTier as ContractBotTier } from "./bindings/bot_nft/src";
 // Compile-time check: domain UserProfile must cover the contract's shape.
 // Using `extends` with `unknown` ensures the check does not error even if the
 // generated `u64`/`u32` branded types are not exactly `bigint`/`number`.
-type _CheckUserProfile = ContractUserProfile extends {
-  address: string;
-  username: string;
-}
-  ? true
-  : true;
-type _CheckBotTier = ContractBotTier extends string ? true : true;
-const _typeChecks: [_CheckUserProfile, _CheckBotTier] = [true, true];
-void _typeChecks;
+// Each check fails to compile if the generated binding drifts from the domain shape.
+const _checkUserProfile: { address: string; username: string } =
+  {} as ContractUserProfile;
+const _checkBotTier: string = {} as ContractBotTier;
+void _checkUserProfile;
+void _checkBotTier;
 
 /**
  * Strict conversion of an untyped, contract-decoded value to `bigint` (#484).
@@ -412,7 +409,7 @@ export async function buyBot(address: string, listingId: bigint): Promise<string
   return buildTxXdr(
     CONTRACT_ADDRESSES.marketplace,
     "buy_bot",
-    [nativeToScVal(listingId, { type: "u128" })],
+    [addressToScVal(address), u64ToScVal(listingId)],
     address
   );
 }
@@ -652,7 +649,7 @@ export async function cancelListing(
   return buildTxXdr(
     CONTRACT_ADDRESSES.marketplace,
     "cancel_listing",
-    [nativeToScVal(listingId, { type: "u128" })],
+    [addressToScVal(userAddress), u64ToScVal(listingId)],
     userAddress
   );
 }
