@@ -26,7 +26,7 @@ The AutoMint architecture comprises five Soroban smart contracts interacting via
 
 Two contracts are **leaves** (Registry and Token: they never make outbound cross-contract calls), and the dependency graph is acyclic. Registry and Token are therefore deployed first in dependency terms, and every other contract holds an address pointing at what it needs. Cross-contract calls are made through generated clients — `BotNFTContractClient`, `RegistryContractClient`, and `soroban_sdk::token::Client` — and the callers deliberately use the `try_*` variants so a downstream failure surfaces as a typed error rather than trapping the whole transaction.
 
-**Address wiring.** Only two dependencies are stored on-chain at initialization: BotNFT holds `Registry`, and Marketplace holds `bot_nft` inside its `Config`. Every other dependency is passed in per call — Accrual takes `token_contract` and `registry` as `claim` arguments, BotNFT takes `token` as a `mint_tier` argument, and Marketplace reads the payment token from `listing.currency`. This keeps the deployment order flexible but means the **frontend is responsible for passing the correct contract IDs**; a wrong address is a per-transaction failure, not a deploy-time one.
+**Address wiring.** BotNFT stores its registry and payment token during initialization, and Marketplace stores `bot_nft` inside its `Config`. Accrual also stores its token and registry at initialization; the legacy `claim` arguments remain for ABI compatibility. Marketplace reads the payment token from `listing.currency`.
 
 ### Cross-Contract Call Flow
 
@@ -76,8 +76,8 @@ sequenceDiagram
         User->>BotNFT: mint_basic(owner)
         BotNFT->>Registry: try_increment_bot_count(owner)
         BotNFT-->>User: bot_id
-    else Paid Tier Bot (Advanced/Premium)
-        User->>BotNFT: mint_tier(owner, tier, token)
+    else Paid Tier Bot (Bronze/Silver/Gold/Diamond)
+        User->>BotNFT: mint_tier(owner, tier)
         BotNFT->>Token: transfer(owner, bot_nft_contract, price)
         BotNFT->>Registry: try_increment_bot_count(owner)
         BotNFT-->>User: bot_id
@@ -291,7 +291,7 @@ Soroban provides three storage tiers: **Instance**, **Persistent**, and **Tempor
 | | `set_admin` | *(none)* | `(current_admin: Address, new_admin: Address)` | Admin nominated (two-step, #372) |
 | | `adm_acpt` | *(none)* | `(current_admin: Address, pending: Address)` | Nominated admin accepted (#372) |
 | | `adm_cncl` | *(none)* | `(current_admin: Address, pending: Address)` | Pending transfer cancelled (#372) |
-| **BotNFT** | `mint` | `owner: Address` | `(bot_id: u64, tier: Tier)` | Bot NFT minted |
+| **BotNFT** | `mint` | `owner: Address` | `(bot_id: u64, tier: BotTier)` | Bot NFT minted |
 | | `transfer` | `from: Address`, `to: Address` | `bot_id: u64` | Bot NFT ownership transferred |
 | **Accrual** | `start` | `user: Address` | `timestamp: u64` | Accrual tracking started |
 | | `mint` | `user: Address` | `amt_to_mint: i128` | AMT tokens minted on claim |

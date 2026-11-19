@@ -66,6 +66,7 @@ export const CONTRACT_ERROR_MESSAGES: Readonly<
     13: message("Invalid amount", "The withdrawal amount must be positive.", "Enter a valid amount."),
     14: message("Treasury balance too low", "The bot treasury does not have enough payment tokens.", "Try a smaller withdrawal."),
     15: message("Bot ID limit reached", "No further bot IDs can be allocated.", "Contact support."),
+    20: message("Invalid tier rate", "The new rate must be non-zero and within the allowed adjustment range.", "Choose a rate within half or double the current rate."),
   },
   accrual: {
     1: message("Already initialized", "The accrual contract has already been configured.", "Refresh the page."),

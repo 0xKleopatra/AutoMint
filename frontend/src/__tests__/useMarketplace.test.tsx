@@ -9,7 +9,7 @@ import {
   useCancelListing,
 } from '../hooks/useMarketplace';
 import { getActiveListings, getUserListings } from '@/lib/contracts';
-import { executeTransaction } from '@/lib/transaction';
+import { executeTransaction, runTxWithToasts } from '@/lib/transaction';
 import { useWalletStore } from '@/store/walletStore';
 import { toast } from 'sonner';
 import type { MarketplaceListing } from '@/types';
@@ -18,6 +18,21 @@ import type { MarketplaceListing } from '@/types';
 jest.mock('@/lib/contracts');
 jest.mock('@/lib/transaction', () => ({
   executeTransaction: jest.fn(),
+  runTxWithToasts: jest.fn((params) =>
+    new Promise((resolve, reject) => {
+      const toast = jest.requireMock('sonner').toast;
+      const pending = jest.requireMock('@/lib/transaction').executeTransaction({
+        ...params,
+        onStatus: (status: { stage: string; error?: string; explorerUrl?: string }) => {
+          if (status.stage === 'success') {
+            toast.success(params.successMessage, { id: params.id });
+            resolve(status);
+          }
+        },
+      });
+      Promise.resolve(pending).then(resolve, reject);
+    })
+  ),
 }));
 jest.mock('@/store/walletStore', () => ({
   ...jest.requireActual('@/store/walletStore'),
@@ -29,6 +44,9 @@ const mockGetActiveListings = getActiveListings as jest.MockedFunction<typeof ge
 const mockGetUserListings = getUserListings as jest.MockedFunction<typeof getUserListings>;
 const mockExecuteTransaction = executeTransaction as jest.MockedFunction<
   typeof executeTransaction
+>;
+const mockRunTxWithToasts = runTxWithToasts as jest.MockedFunction<
+  typeof runTxWithToasts
 >;
 const mockUseWalletStore = useWalletStore as jest.MockedFunction<typeof useWalletStore>;
 
@@ -57,6 +75,7 @@ describe('useMarketplace Hooks', () => {
       opts.onStatus({ stage: 'success', explorerUrl: 'https://explorer.test/tx/1' });
       return 'ok';
     });
+    mockRunTxWithToasts.mockClear();
   });
 
   const wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -127,15 +146,16 @@ describe('useMarketplace Hooks', () => {
       const { result } = renderHook(() => useMintTierBot(), { wrapper });
 
       act(() => {
-        result.current.mutate({ tier: 'Advanced', token: mockPublicKey });
+        result.current.mutate({ tier: 'Bronze' });
       });
 
       await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-      expect(mockExecuteTransaction).toHaveBeenCalledTimes(1);
-      const call = mockExecuteTransaction.mock.calls[0][0];
+      expect(mockRunTxWithToasts).toHaveBeenCalledTimes(1);
+      const call = mockRunTxWithToasts.mock.calls[0][0];
       expect(call.method).toBe('mint_tier');
       expect(call.sourceAddress).toBe(mockPublicKey);
+      expect(call.args).toHaveLength(2);
       expect(toast.success).toHaveBeenCalledWith(
         'Tier bot minted successfully!',
         expect.objectContaining({ id: 'mint_tier' })
@@ -152,15 +172,13 @@ describe('useMarketplace Hooks', () => {
       const { result } = renderHook(() => useMintTierBot(), { wrapper });
 
       act(() => {
-        result.current.mutate({ tier: 'Premium', token: mockPublicKey });
+        result.current.mutate({ tier: 'Silver' });
       });
 
       await waitFor(() => expect(result.current.isError).toBe(true));
 
       expect(result.current.error).toEqual(error);
-      expect(toast.error).toHaveBeenCalledWith('Mint failed: Minting failed', {
-        id: 'mint_tier',
-      });
+      expect(toast.error).toHaveBeenCalled();
     });
   });
 

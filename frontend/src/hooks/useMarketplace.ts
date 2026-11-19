@@ -1,15 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
 import {
   getActiveListings,
   getUserListings,
   getMarketStats,
   buildListBotArgs,
 } from "@/lib/contracts";
-import { executeTransaction, runTxWithToasts, type TransactionStatus } from "@/lib/transaction";
+import { runTxWithToasts } from "@/lib/transaction";
 import { useWalletStore, selectPublicKey } from "@/store/walletStore";
 import { nativeToScVal, xdr } from "@stellar/stellar-sdk";
-import type { Tier, MarketplaceListing } from "@/types";
+import type { BotTier, MarketplaceListing } from "@/types";
 import { pollWhenVisible } from "@/lib/polling";
 import { STALE_TIME, GC_TIME, qk } from "@/lib/queryKeys";
 import { trackStatus, newTxId } from "@/components/ui/TxStatus";
@@ -78,7 +77,7 @@ export function useMintTierBot() {
   const publicKey = useWalletStore(selectPublicKey);
 
   return useMutation({
-    mutationFn: async ({ tier, token }: { tier: Tier; token: string }) => {
+    mutationFn: async ({ tier }: { tier: BotTier }) => {
       if (!publicKey) throw new Error("Wallet not connected");
 
       return runTxWithToasts({
@@ -87,7 +86,6 @@ export function useMintTierBot() {
         args: [
           nativeToScVal(publicKey, { type: "address" }),
           xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(tier)]),
-          nativeToScVal(token, { type: "address" }),
         ],
         sourceAddress: publicKey,
         id: "mint_tier",

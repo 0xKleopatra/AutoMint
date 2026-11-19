@@ -50,13 +50,13 @@ let bot_id = bot_nft_client.mint_basic(&owner);
 ### mint_tier
 
 ```rust
-pub fn mint_tier(env: Env, owner: Address, tier: Tier, token: Address) -> Result<u64, BotNFTError>
+pub fn mint_tier(env: Env, owner: Address, tier: BotTier) -> Result<u64, BotNFTError>
 ```
 
-Mint a paid bot at the given `Tier` (`Basic`, `Advanced`, or `Premium`), charging `tier.price()` in `token` from `owner` to the contract if the price is greater than zero. Requires authorization from `owner`.
+Mint a bot at the given `BotTier` (`Basic`, `Bronze`, `Silver`, `Gold`, or `Diamond`), charging `tier.price()` in the payment token configured during initialization from `owner` to the contract if the price is greater than zero. Requires authorization from `owner`.
 
-- `tier`: The purchase tier; maps internally to a `BotTier` (`Advanced` → `BotTier::Bronze`, `Premium` → `BotTier::Silver`).
-- `token`: The token contract address used for payment.
+- `tier`: The bot tier to mint. Each tier is available for purchase at its configured price.
+- The payment token is configured once during contract initialization.
 
 Returns the new bot ID.
 
@@ -67,8 +67,25 @@ Errors:
 Example:
 
 ```rust
-let bot_id = bot_nft_client.mint_tier(&owner, &Tier::Advanced, &token_id);
+let bot_id = bot_nft_client.mint_tier(&owner, &BotTier::Gold);
 ```
+
+---
+
+### Tier rate changes and existing accrual records
+
+`set_tier_rate` updates the tier rate used by BotNFT immediately and emits
+`rate_set`. Accrual records are stored separately, so a keeper should process
+that event to refresh current holders without losing points earned at the old
+rate:
+
+1. Enumerate bot IDs for the changed tier with `get_bots_by_tier`, paging until
+   the returned page is empty.
+2. Read each bot with `get_bot` and collect its current owner address.
+3. Call the permissionless Accrual `sync_rate(owner)` once per unique owner.
+
+`sync_rate` settles elapsed time using the previously stored rate before it
+reads the holder's new combined rate from BotNFT.
 
 ---
 
