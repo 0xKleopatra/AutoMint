@@ -7,7 +7,8 @@ import { Menu, X, Wallet, LogOut, AlertTriangle, Loader2, Download, Copy } from 
 import clsx from "clsx";
 import { useWallet } from "@/hooks/useWallet";
 import { useFocusLock } from "@/hooks/useFocusLock";
-import { truncateAddress, fullAddressTitle, fullAddressAriaLabel, useCopyToClipboard } from "@/lib/truncateAddress";
+import { truncateAddress, fullAddressTitle, fullAddressAriaLabel } from "@/lib/truncateAddress";
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 
 const navLinks = [
   { label: "Dashboard", href: "/dashboard" },
