@@ -16,6 +16,8 @@ import * as Sentry from "@sentry/nextjs";
 import RootError from "../error";
 import DashboardError from "../dashboard/error";
 import MarketplaceError from "../marketplace/error";
+import LeaderboardError from "../leaderboard/error";
+import ProfileError from "../profile/error";
 import GlobalError from "../global-error";
 
 jest.mock("@sentry/nextjs", () => ({
@@ -40,6 +42,8 @@ describe.each([
   ["root", RootError, "app"],
   ["dashboard", DashboardError, "dashboard"],
   ["marketplace", MarketplaceError, "marketplace"],
+  ["leaderboard", LeaderboardError, "leaderboard"],
+  ["profile", ProfileError, "profile"],
 ] as const)("%s error boundary", (_name, Boundary, boundaryTag) => {
   it("renders a fallback instead of a blank page", () => {
     render(<Boundary error={makeError()} reset={jest.fn()} />);
