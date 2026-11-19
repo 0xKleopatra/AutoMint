@@ -11,7 +11,7 @@
  * Env vars:
  *   AM_NETWORK                 network name (default: testnet)
  *   AM_RPC_URL                 Soroban RPC URL (default: testnet public RPC)
- *   AM_DB_PATH                 SQLite file (default: <repo>/indexer/data/am-indexer.db)
+ *   AM_DB_PATH                 SQLite file (default: <repo>/indexer/data/am-indexer-<network>.db)
  *   AM_START_LEDGER            first ledger to index on a cold start
  *   AM_POLL_INTERVAL_MS        poll loop delay (default 5000)
  *   AM_PORT                    API port (default 8765)
