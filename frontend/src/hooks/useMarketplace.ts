@@ -16,6 +16,7 @@ import { trackStatus, newTxId } from "@/components/ui/TxStatus";
 import type { DashboardData } from "./useAccrual";
 import { toastContractError } from "@/lib/errors";
 import { CONTRACT_ADDRESSES } from "@/lib/constants";
+import { addressToScVal, u64ToScVal } from "@/lib/stellar";
 export { useProfiles } from "./useProfiles";
 
 export function useBuyBot() {
@@ -30,7 +31,7 @@ export function useBuyBot() {
       const status = await runTxWithToasts({
         contractId: CONTRACT_ADDRESSES.marketplace,
         method: "buy_bot",
-        args: [nativeToScVal(listingId, { type: "u128" })],
+        args: [addressToScVal(publicKey), u64ToScVal(listingId)],
         sourceAddress: publicKey,
         id: "buy_bot",
         label: "purchase",
@@ -213,7 +214,7 @@ export function useCancelListing() {
       const status = await runTxWithToasts({
         contractId: CONTRACT_ADDRESSES.marketplace,
         method: "cancel_listing",
-        args: [nativeToScVal(listingId, { type: "u128" })],
+        args: [addressToScVal(publicKey), u64ToScVal(listingId)],
         sourceAddress: publicKey,
         id: "cancel_listing",
         label: "cancellation",
