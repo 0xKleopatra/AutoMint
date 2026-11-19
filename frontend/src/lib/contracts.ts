@@ -299,6 +299,10 @@ export function parseBotNFT(rawData: Record<string, unknown>): BotNFT {
     id: toBigInt(rawData.id, "id"),
     nickname: rawData.nickname != null ? String(rawData.nickname) : undefined,
     owner: String(rawData.owner ?? ""),
+    // The bot struct carries `minter` (the royalty recipient). Fall back to
+    // the owner so legacy fixtures/mocks render without a phantom royalty.
+    minter:
+      rawData.minter != null ? String(rawData.minter) : String(rawData.owner ?? ""),
     tier,
     accrual_rate: toBigInt(rawData.accrual_rate, "accrual_rate"),
     minted_at: Number(toBigIntOr(rawData.minted_at, 0n, "minted_at")),
@@ -706,6 +710,39 @@ export async function getMarketStats(sourceAddress?: string): Promise<TierStats[
     last_sale_price: toBigInt(entry.last_sale_price, "last_sale_price"),
     floor_price: toBigInt(entry.floor_price, "floor_price"),
   }));
+}
+
+/** The marketplace's on-chain fee configuration (basis points). */
+export interface MarketplaceConfig {
+  admin: string;
+  botNft: string;
+  /** Platform fee in basis points of the sale price. */
+  feeBps: number;
+  /** Creator royalty in basis points, paid unless the seller is the minter. */
+  royaltyBps: number;
+}
+
+/**
+ * Read the marketplace `config()` — the source of truth for `fee_bps` and
+ * `royalty_bps`. Both are admin-configurable (`set_fee_bps`), so the UI must
+ * never hardcode the 2.5% default: the seller's "you receive" figure has to
+ * mirror `buy_bot`'s split exactly.
+ */
+export async function getMarketplaceConfig(
+  sourceAddress?: string
+): Promise<MarketplaceConfig> {
+  const raw = await simulateContractCall<Record<string, unknown>>(
+    CONTRACT_ADDRESSES.marketplace,
+    "config",
+    [],
+    defaultSource(sourceAddress)
+  );
+  return {
+    admin: String(raw?.admin ?? ""),
+    botNft: String(raw?.bot_nft ?? ""),
+    feeBps: Number(toBigInt(raw?.fee_bps, "fee_bps")),
+    royaltyBps: Number(toBigInt(raw?.royalty_bps, "royalty_bps")),
+  };
 }
 
 /**

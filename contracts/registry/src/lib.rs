@@ -853,60 +853,37 @@ impl RegistryContract {
         true
     }
 
-    /// Incrementally maintain the bounded top-N list (#332). Cost is O(N) with
-    /// N = `LEADERBOARD_SIZE`, independent of total user count. Points only
-    /// ever increase, so a user already listed is removed and re-placed by the
-    /// tiebreak (#368); an unlisted user enters only if they outrank the floor.
-    fn update_top(env: &Env, user: &Address, new_total: u64) {
-        let mut top = Self::load_top(env);
     /// In-place bounded top-N maintenance (#332 lifetime board, #371 season
     /// boards). Cost is O(N) with N = `LEADERBOARD_SIZE`, independent of total
     /// user count. Points only ever increase, so a user already listed is
-    /// moved up; an unlisted user enters only if the list has room or strictly
-    /// beats the current floor (a tie with the floor keeps the incumbent, who
-    /// reached the total first). Returns `true` when `top` was modified.
-    fn apply_to_top(top: &mut Vec<(Address, u64)>, user: &Address, new_total: u64) -> bool {
+    /// removed and re-placed by the full #368 tiebreak; an unlisted user only
+    /// enters if they outrank the floor. Returns `true` when `top` changed.
+    fn apply_to_top(
+        env: &Env,
+        top: &mut Vec<(Address, u64)>,
+        user: &Address,
+        new_total: u64,
+    ) -> bool {
         let mut was_listed = false;
         let mut i = 0;
         while i < top.len() {
             if top.get(i).unwrap().0 == *user {
                 top.remove(i);
+                was_listed = true;
                 break;
             }
             i += 1;
         }
-        if Self::place_in_top(env, &mut top, user, new_total) {
-            env.storage().instance().set(&DataKey::TopUsers, &top);
-        }
-
-        if !was_listed && top.len() >= LEADERBOARD_SIZE {
-            let floor = top.last().map(|e| e.1).unwrap_or(0);
-            if new_total <= floor {
-                return false; // list unchanged (nothing was removed)
-            }
-        }
-
-        // Insert after every entry with points >= new_total (stable ties).
-        let mut pos = top.len();
-        let mut k = 0;
-        while k < top.len() {
-            if top.get(k).unwrap().1 < new_total {
-                pos = k;
-                break;
-            }
-            k += 1;
-        }
-        top.insert(pos, (user.clone(), new_total));
-        if top.len() > LEADERBOARD_SIZE {
-            top.pop_back();
-        }
-        true
+        // `place_in_top` applies the #368 rank (points, then registered_at,
+        // then address bytes) and enforces the bounded size. Because the user
+        // was just removed, a previously listed user is always reinserted.
+        Self::place_in_top(env, top, user, new_total) || was_listed
     }
 
     /// Incrementally maintain the bounded top-N lifetime list (#332).
     fn update_top(env: &Env, user: &Address, new_total: u64) {
         let mut top = Self::load_top(env);
-        if Self::apply_to_top(&mut top, user, new_total) {
+        if Self::apply_to_top(env, &mut top, user, new_total) {
             env.storage().instance().set(&DataKey::TopUsers, &top);
         }
     }
@@ -928,7 +905,7 @@ impl RegistryContract {
     /// sharing the lifetime board's eviction/tie semantics.
     fn update_season_top(env: &Env, season: u32, user: &Address, new_total: u64) {
         let mut top = Self::load_season_top(env, season);
-        if Self::apply_to_top(&mut top, user, new_total) {
+        if Self::apply_to_top(env, &mut top, user, new_total) {
             env.storage()
                 .instance()
                 .set(&DataKey::SeasonTop(season), &top);

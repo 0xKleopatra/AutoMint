@@ -4,7 +4,7 @@
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
     contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, Address,
-    Env, IntoVal, Vec,
+    BytesN, Env, IntoVal, Val, Vec,
 };
 
 /// The one bot_nft entry point accrual calls. Declared locally rather than
@@ -129,6 +129,8 @@ pub enum AccrualError {
     Frozen = 12,
     TokenConfigFailed = 13,
     BotNftCallFailed = 14,
+    /// A forwarded admin-only token call failed at the token contract.
+    TokenAdminCallFailed = 15,
 }
 
 /// Error code carried by a failed cross-contract call: `0` on success, the
@@ -170,6 +172,46 @@ fn is_frozen(env: &Env, user: &Address) -> bool {
 fn require_unfrozen(env: &Env, user: &Address) -> Result<(), AccrualError> {
     if is_frozen(env, user) {
         return Err(AccrualError::Frozen);
+    }
+    Ok(())
+}
+
+/// Forward an admin-only token call through this contract's contract auth.
+///
+/// In production the accrual contract *is* the token admin (see
+/// `scripts/deploy.sh#wire_token_admin`). A contract can only authenticate its
+/// own invocations from inside itself, so without an explicit forwarder no
+/// address can call the token's `pause`, `unpause`, `upgrade`, `set_admin`,
+/// `set_max_supply`, or `set_metadata` ever again — the token would be
+/// un-pausable and un-upgradeable in an incident. Every forwarder below is
+/// gated by `require_admin`, so the accrual admin stays in control.
+fn forward_token_admin_call(
+    env: &Env,
+    fn_name: soroban_sdk::Symbol,
+    args: Vec<Val>,
+) -> Result<(), AccrualError> {
+    require_admin(env)?;
+    let token: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Token)
+        .ok_or(AccrualError::NotInitialized)?;
+    let mut auth_entries = Vec::new(env);
+    auth_entries.push_back(InvokerContractAuthEntry::Contract(SubContractInvocation {
+        context: ContractContext {
+            contract: token.clone(),
+            fn_name: fn_name.clone(),
+            args: args.clone(),
+        },
+        sub_invocations: Vec::new(env),
+    }));
+    env.authorize_as_current_contract(auth_entries);
+    let result = env.try_invoke_contract::<(), soroban_sdk::Error>(&token, &fn_name, args);
+    if result.is_err() || matches!(&result, Ok(Err(_))) {
+        let code = invoke_err_code(&result);
+        env.events()
+            .publish((symbol_short!("failadm"), fn_name), code);
+        return Err(AccrualError::TokenAdminCallFailed);
     }
     Ok(())
 }
@@ -306,6 +348,71 @@ impl AccrualContract {
             return Err(AccrualError::TokenConfigFailed);
         }
         Ok(())
+    }
+
+    /// Admin-only: pause the token through this contract's contract auth.
+    /// Needed because the accrual contract is the token admin in production.
+    pub fn pause_token(env: Env) -> Result<(), AccrualError> {
+        forward_token_admin_call(
+            &env,
+            soroban_sdk::Symbol::new(&env, "pause"),
+            Vec::new(&env),
+        )
+    }
+
+    /// Admin-only: unpause the token through this contract's contract auth.
+    pub fn unpause_token(env: Env) -> Result<(), AccrualError> {
+        forward_token_admin_call(
+            &env,
+            soroban_sdk::Symbol::new(&env, "unpause"),
+            Vec::new(&env),
+        )
+    }
+
+    /// Admin-only: upgrade the token wasm through this contract's contract
+    /// auth, so a critical token fix can be shipped in an incident.
+    pub fn upgrade_token(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), AccrualError> {
+        let mut args = Vec::new(&env);
+        args.push_back(new_wasm_hash.into_val(&env));
+        forward_token_admin_call(&env, soroban_sdk::Symbol::new(&env, "upgrade"), args)
+    }
+
+    /// Admin-only: nominate a new token admin. The nominee must still call
+    /// the token's `accept_admin` themselves (or, if the nominee is this
+    /// accrual contract, [`Self::accept_token_admin`]).
+    pub fn set_token_admin(env: Env, new_admin: Address) -> Result<(), AccrualError> {
+        let mut args = Vec::new(&env);
+        args.push_back(new_admin.into_val(&env));
+        forward_token_admin_call(&env, soroban_sdk::Symbol::new(&env, "set_admin"), args)
+    }
+
+    /// Admin-only: cancel a pending token-admin transfer through this
+    /// contract's contract auth.
+    pub fn cancel_token_admin_transfer(env: Env) -> Result<(), AccrualError> {
+        forward_token_admin_call(
+            &env,
+            soroban_sdk::Symbol::new(&env, "cancel_admin_transfer"),
+            Vec::new(&env),
+        )
+    }
+
+    /// Admin-only: set (or clear with `None`) the token's max supply cap.
+    pub fn set_token_max_supply(env: Env, new_cap: Option<i128>) -> Result<(), AccrualError> {
+        let mut args = Vec::new(&env);
+        args.push_back(new_cap.into_val(&env));
+        forward_token_admin_call(&env, soroban_sdk::Symbol::new(&env, "set_max_supply"), args)
+    }
+
+    /// Admin-only: update the token's display name and symbol.
+    pub fn set_token_metadata(
+        env: Env,
+        name: soroban_sdk::String,
+        symbol: soroban_sdk::String,
+    ) -> Result<(), AccrualError> {
+        let mut args = Vec::new(&env);
+        args.push_back(name.into_val(&env));
+        args.push_back(symbol.into_val(&env));
+        forward_token_admin_call(&env, soroban_sdk::Symbol::new(&env, "set_metadata"), args)
     }
 
     /// Admin-only: block `user` from syncing rates, claiming, or being
@@ -979,6 +1086,90 @@ mod test {
         env.mock_auths(&[]);
 
         assert!(client.try_set_mint_limit(&1_000_i128, &100_u32).is_err());
+    }
+
+    // --- Token-admin passthroughs: the accrual contract is the token admin in
+    // production, so every admin-only token call has to be forwarded through
+    // it with contract auth. Without these, pause/upgrade/admin rotation are
+    // unreachable forever.
+
+    #[test]
+    fn admin_can_pause_and_unpause_token_through_accrual() {
+        use automint_token::AMTTokenClient;
+        let (env, _admin, _registry, token, client) = setup();
+        let token_client = AMTTokenClient::new(&env, &token);
+
+        assert!(!token_client.paused());
+        client.pause_token();
+        assert!(token_client.paused());
+        client.unpause_token();
+        assert!(!token_client.paused());
+    }
+
+    #[test]
+    fn non_admin_cannot_forward_token_admin_calls() {
+        let (env, _admin, _registry, _token, client) = setup();
+        env.mock_auths(&[]);
+        let hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
+
+        assert!(client.try_pause_token().is_err());
+        assert!(client.try_unpause_token().is_err());
+        assert!(client.try_upgrade_token(&hash).is_err());
+        assert!(client
+            .try_set_token_admin(&Address::generate(&env))
+            .is_err());
+        assert!(client.try_cancel_token_admin_transfer().is_err());
+        assert!(client.try_set_token_max_supply(&Some(1_000_i128)).is_err());
+    }
+
+    #[test]
+    fn admin_can_rotate_token_admin_through_accrual() {
+        use automint_token::AMTTokenClient;
+        let (env, _admin, _registry, token, client) = setup();
+        let token_client = AMTTokenClient::new(&env, &token);
+        let new_admin = Address::generate(&env);
+
+        client.set_token_admin(&new_admin);
+        assert_eq!(token_client.pending_admin(), Some(new_admin.clone()));
+        // The accrual contract is still the active admin until the nominee accepts.
+        assert_eq!(token_client.admin(), client.address);
+
+        token_client.accept_admin();
+        assert_eq!(token_client.admin(), new_admin);
+        assert_eq!(token_client.pending_admin(), None);
+    }
+
+    #[test]
+    fn admin_can_cancel_pending_token_admin_rotation() {
+        use automint_token::AMTTokenClient;
+        let (env, _admin, _registry, token, client) = setup();
+        let token_client = AMTTokenClient::new(&env, &token);
+
+        client.set_token_admin(&Address::generate(&env));
+        assert!(token_client.pending_admin().is_some());
+        client.cancel_token_admin_transfer();
+        assert_eq!(token_client.pending_admin(), None);
+    }
+
+    #[test]
+    fn admin_can_set_token_max_supply_and_metadata_through_accrual() {
+        use automint_token::AMTTokenClient;
+        let (env, _admin, _registry, token, client) = setup();
+        let token_client = AMTTokenClient::new(&env, &token);
+
+        client.set_token_max_supply(&Some(1_000_i128));
+        assert_eq!(token_client.max_supply(), Some(1_000));
+        client.set_token_max_supply(&None);
+        assert_eq!(token_client.max_supply(), None);
+
+        client.set_token_metadata(
+            &soroban_sdk::String::from_str(&env, "AutoMint Token"),
+            &soroban_sdk::String::from_str(&env, "AMT2"),
+        );
+        assert_eq!(
+            token_client.symbol(),
+            soroban_sdk::String::from_str(&env, "AMT2")
+        );
     }
 
     static NEXT_AUTO_NAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

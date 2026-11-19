@@ -35,6 +35,11 @@ export interface BotNFT {
   /** Owner-set nickname; undefined when unset. Use `tier` to derive a display name. */
   nickname?: string | undefined;
   owner: string;
+  /**
+   * Original minter (the creator royalty recipient). Older cached/mock records
+   * omit it, in which case it is treated as `owner` so no royalty is shown.
+   */
+  minter?: string | undefined;
   tier: BotTier;
   accrual_rate: bigint;
   minted_at: number;

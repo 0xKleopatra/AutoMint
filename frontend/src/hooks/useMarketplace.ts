@@ -4,6 +4,7 @@ import {
   getActiveListings,
   getUserListings,
   getMarketStats,
+  getMarketplaceConfig,
   buildListBotArgs,
 } from "@/lib/contracts";
 import { executeTransaction, runTxWithToasts, type TransactionStatus } from "@/lib/transaction";
@@ -125,6 +126,20 @@ export function useMarketStats() {
     refetchInterval: pollWhenVisible(),
     staleTime: STALE_TIME.SHORT,
     gcTime: GC_TIME.SHORT,
+  });
+}
+
+/**
+ * On-chain marketplace fee configuration. Fetched once per session
+ * (`STALE_TIME.STATIC`): it only changes when the admin calls `set_fee_bps`,
+ * and every fee preview must read it instead of a hardcoded 2.5%.
+ */
+export function useMarketplaceConfig() {
+  return useQuery({
+    queryKey: qk.marketplaceConfig(),
+    queryFn: () => getMarketplaceConfig(),
+    staleTime: STALE_TIME.STATIC,
+    gcTime: GC_TIME.LONG,
   });
 }
 
