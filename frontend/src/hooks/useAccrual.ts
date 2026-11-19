@@ -11,7 +11,7 @@ import {
   getAmtDecimals,
   getUserTotalRate,
 } from "@/lib/contracts";
-import { executeTransaction, type TransactionStatus } from "@/lib/transaction";
+import { executeTransaction, runTxWithToasts, type TransactionStatus } from "@/lib/transaction";
 import { getLedgerCloseTime } from "@/lib/stellar";
 import { useWalletStore, selectPublicKey } from "@/store/walletStore";
 import { useState, useEffect, useRef } from "react";
@@ -418,63 +418,22 @@ export function useClaim() {
     mutationFn: async () => {
       if (!publicKey) throw new Error("Wallet not connected");
 
-      const ACCRUAL_CONTRACT_ID = CONTRACT_ADDRESSES.accrual;
-      const TOKEN_CONTRACT_ID = CONTRACT_ADDRESSES.token;
-      const REGISTRY_CONTRACT_ID = CONTRACT_ADDRESSES.registry;
       const txId = newTxId("claim");
-
-      return new Promise((resolve, reject) => {
-        executeTransaction({
-          contractId: ACCRUAL_CONTRACT_ID,
-          method: "claim",
-          args: [
-            nativeToScVal(publicKey, { type: "address" }),
-            nativeToScVal(TOKEN_CONTRACT_ID, { type: "address" }),
-            nativeToScVal(REGISTRY_CONTRACT_ID, { type: "address" }),
-          ],
-          sourceAddress: publicKey,
-          onStatus: (status: TransactionStatus) => {
-            trackStatus(txId, "Claim", status);
-            switch (status.stage) {
-              case "building":
-              case "simulating":
-              case "assembling":
-                toast.loading("Preparing claim transaction...", { id: "claim" });
-                break;
-              case "signing":
-                toast.loading("Waiting for wallet signature...", { id: "claim" });
-                break;
-              case "submitting":
-                toast.loading("Submitting claim to blockchain...", { id: "claim" });
-                break;
-              case "polling":
-                toast.loading(
-                  `Confirming on-chain... (${status.hash?.slice(0, 8)})`,
-                  { id: "claim" }
-                );
-                break;
-              case "success":
-                toast.success("Points claimed successfully!", {
-                  id: "claim",
-                  action: status.explorerUrl
-                    ? {
-                        label: "View",
-                        onClick: () => window.open(status.explorerUrl, "_blank"),
-                      }
-                    : undefined,
-                });
-                resolve(status);
-                break;
-              case "error":
-                toast.error(`Claim failed: ${status.error || "Unknown error"}`, {
-                  id: "claim",
-                });
-                reject(new Error(status.error || "Claim failed"));
-                break;
-            }
-          },
-        }).catch(reject);
+      const status = await runTxWithToasts({
+        contractId: CONTRACT_ADDRESSES.accrual,
+        method: "claim",
+        args: [
+          nativeToScVal(publicKey, { type: "address" }),
+          nativeToScVal(CONTRACT_ADDRESSES.token, { type: "address" }),
+          nativeToScVal(CONTRACT_ADDRESSES.registry, { type: "address" }),
+        ],
+        sourceAddress: publicKey,
+        id: "claim",
+        label: "claim",
+        successMessage: "Points claimed successfully!",
       });
+      trackStatus(txId, "Claim", status);
+      return status;
     },
     onMutate: async () => {
       // Optimistic update (#462): zero the pending counter immediately by
