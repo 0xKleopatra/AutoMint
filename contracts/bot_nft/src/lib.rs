@@ -21,14 +21,6 @@ pub trait RegistryInterface {
     fn decrement_bot_count(env: Env, user: Address);
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[contracttype]
-pub enum Tier {
-    Basic = 0,
-    Advanced = 1,
-    Premium = 2,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[contracttype]
 #[repr(u32)]
@@ -38,17 +30,6 @@ pub enum BotTier {
     Silver = 2,
     Gold = 3,
     Diamond = 4,
-}
-
-impl Tier {
-    /// Mint price for this legacy tier, in AMT base units (7 decimals).
-    pub fn price(self) -> i128 {
-        match self {
-            Tier::Basic => 0,
-            Tier::Advanced => 500_0000000,
-            Tier::Premium => 2000_0000000,
-        }
-    }
 }
 
 impl BotTier {
@@ -198,6 +179,8 @@ pub enum BotNFTError {
     ApprovalExpired = 18,
     /// The caller is neither the owner, an approved spender, nor an approved operator.
     NotApproved = 19,
+    /// The requested tier rate is zero or outside the permitted adjustment band.
+    InvalidRate = 20,
 }
 
 const LEDGER_BUMP: u32 = 120960;
@@ -329,12 +312,15 @@ impl BotNFTContract {
     /// Admin-only: change the base accrual rate for one tier. The new rate
     /// must be non-zero and within [current/2, current*2], so a typo cannot
     /// silently reprice every bot of that tier. Emits `rate_set` with the
-    /// old and new rates.
+    /// old and new rates. Existing accrual records are refreshed lazily:
+    /// after observing this event, a keeper should call sync_rate for each
+    /// holder with bots in the changed tier. The accrual contract settles
+    /// elapsed time at the old rate before applying the new one.
     ///
     /// Auth: admin only.
     ///
-    /// Errors: `NotInitialized`, `InvalidTier` when `rate` is zero,
-    /// `Unauthorized` when the change is outside the 2x band.
+    /// Errors: `NotInitialized`, `InvalidRate` when `rate` is zero or the
+    /// change is outside the 2x band.
     pub fn set_tier_rate(env: Env, tier: BotTier, rate: u64) -> Result<(), BotNFTError> {
         let admin: Address = env
             .storage()
@@ -344,7 +330,7 @@ impl BotNFTContract {
         admin.require_auth();
 
         if rate == 0 {
-            return Err(BotNFTError::InvalidTier);
+            return Err(BotNFTError::InvalidRate);
         }
 
         let old_rate = Self::get_tier_rate_internal(&env, tier);
@@ -352,7 +338,7 @@ impl BotNFTContract {
         let max_allowed = old_rate.saturating_mul(2);
         let min_allowed = old_rate / 2;
         if rate > max_allowed || (min_allowed > 0 && rate < min_allowed) {
-            return Err(BotNFTError::Unauthorized);
+            return Err(BotNFTError::InvalidRate);
         }
 
         env.storage()
@@ -468,17 +454,16 @@ impl BotNFTContract {
         Self::do_mint(&env, &owner, BotTier::Basic, false)
     }
 
-    /// Mint a paid-tier bot to `owner`: charge the tier's price in the
-    /// payment token (Basic is free, Advanced 5 AMT, Premium 20 AMT), then
-    /// mint the corresponding `BotTier`. The token transfer is the payment —
-    /// it fails when `owner` cannot cover the price.
+    /// Mint a bot of any tier to `owner`: charge the tier's price in the
+    /// configured payment token (Basic is free), then mint that same
+    /// `BotTier`. The token transfer fails when `owner` cannot cover the price.
     ///
     /// Auth: `owner.require_auth()`.
     ///
     /// Errors: `NotInitialized`, a token transfer failure on insufficient
     /// balance, plus every error `do_mint` can raise (`SupplyCapExceeded`,
     /// `TierSoldOut`, `Overflow`). Returns the new bot id.
-    pub fn mint_tier(env: Env, owner: Address, tier: Tier) -> Result<u64, BotNFTError> {
+    pub fn mint_tier(env: Env, owner: Address, tier: BotTier) -> Result<u64, BotNFTError> {
         if !env.storage().instance().has(&DataKey::Initialized) {
             return Err(BotNFTError::NotInitialized);
         }
@@ -492,19 +477,14 @@ impl BotNFTContract {
             token_client.transfer(&owner, &env.current_contract_address(), &price);
         }
 
-        let bot_tier = match tier {
-            Tier::Basic => BotTier::Basic,
-            Tier::Advanced => BotTier::Bronze,
-            Tier::Premium => BotTier::Silver,
-        };
-        Self::do_mint(&env, &owner, bot_tier, false)
+        Self::do_mint(&env, &owner, tier, false)
     }
 
     /// Admin-only withdrawal of accumulated tier payments (#322).
     ///
-    /// `mint_tier` takes the payment token as a per-call argument (no token is
-    /// stored yet), so the token to withdraw is passed explicitly. The balance
-    /// is checked up front so an over-withdrawal fails before any transfer.
+    /// `mint_tier` uses the payment token stored during initialization. The
+    /// token address is supplied explicitly here so the balance is checked
+    /// before transferring; callers should pass the configured payment token.
     pub fn withdraw(
         env: Env,
         token: Address,
@@ -1670,14 +1650,18 @@ mod test {
         let (env, _admin, registry, token, client) = setup();
         let user = Address::generate(&env);
         register_user(&env, &registry, &user, "user1");
-        fund_user(&env, &token, &user, 100_000_000_000);
-        let basic_id = client.mint_tier(&user, &Tier::Basic);
-        let advanced_id = client.mint_tier(&user, &Tier::Advanced);
-        let premium_id = client.mint_tier(&user, &Tier::Premium);
+        fund_user(&env, &token, &user, 400_000_000_000);
+        let basic_id = client.mint_tier(&user, &BotTier::Basic);
+        let advanced_id = client.mint_tier(&user, &BotTier::Bronze);
+        let premium_id = client.mint_tier(&user, &BotTier::Silver);
+        let gold_id = client.mint_tier(&user, &BotTier::Gold);
+        let diamond_id = client.mint_tier(&user, &BotTier::Diamond);
 
         let basic_bot = client.get_bot(&basic_id);
         let advanced_bot = client.get_bot(&advanced_id);
         let premium_bot = client.get_bot(&premium_id);
+        let gold_bot = client.get_bot(&gold_id);
+        let diamond_bot = client.get_bot(&diamond_id);
 
         // Base rate plus the deterministic rarity bonus (see #395).
         assert_eq!(
@@ -1700,6 +1684,15 @@ mod test {
         assert_eq!(basic_bot.tier, BotTier::Basic);
         assert_eq!(advanced_bot.tier, BotTier::Bronze);
         assert_eq!(premium_bot.tier, BotTier::Silver);
+        assert_eq!(gold_bot.tier, BotTier::Gold);
+        assert_eq!(diamond_bot.tier, BotTier::Diamond);
+        assert_eq!(
+            client.treasury_balance(&token),
+            BotTier::Bronze.price()
+                + BotTier::Silver.price()
+                + BotTier::Gold.price()
+                + BotTier::Diamond.price()
+        );
 
         assert_eq!(basic_bot.minted_at, env.ledger().timestamp());
     }
@@ -1807,8 +1800,8 @@ mod test {
         fund_user(&env, &token, &user, 100_000_000_000);
 
         let id1 = client.mint_basic(&user);
-        let id2 = client.mint_tier(&user, &Tier::Advanced);
-        let id3 = client.mint_tier(&user, &Tier::Premium);
+        let id2 = client.mint_tier(&user, &BotTier::Bronze);
+        let id3 = client.mint_tier(&user, &BotTier::Silver);
 
         // #395: each bot's effective rate includes its deterministic bonus.
         let expected = client.get_bot(&id1).accrual_rate
@@ -2200,7 +2193,7 @@ mod test {
 
         let token_client = automint_token::AMTTokenClient::new(&env, &token_id);
         let initial_balance = token_client.balance(&user);
-        let bot_id = client.mint_tier(&user, &Tier::Basic);
+        let bot_id = client.mint_tier(&user, &BotTier::Basic);
         let final_balance = token_client.balance(&user);
 
         // Basic tier should not charge
@@ -2219,7 +2212,7 @@ mod test {
         // insufficient balance rather than returning a BotNFTError variant, so
         // this surfaces as a host-level invocation error rather than a typed
         // contract error we can match on. Kept as a plain is_err() check.
-        let result = client.try_mint_tier(&user, &Tier::Advanced);
+        let result = client.try_mint_tier(&user, &BotTier::Bronze);
         assert!(result.is_err());
     }
 
@@ -2229,9 +2222,9 @@ mod test {
         let user = Address::generate(&env);
         register_user(&env, &registry, &user, "testuser");
 
-        let bot1 = client.mint_tier(&user, &Tier::Basic);
-        let bot2 = client.mint_tier(&user, &Tier::Basic);
-        let bot3 = client.mint_tier(&user, &Tier::Basic);
+        let bot1 = client.mint_tier(&user, &BotTier::Basic);
+        let bot2 = client.mint_tier(&user, &BotTier::Basic);
+        let bot3 = client.mint_tier(&user, &BotTier::Basic);
 
         assert_eq!(bot1, 1); // First mint in setup uses id 0
         assert_eq!(bot2, 2);
@@ -2244,7 +2237,7 @@ mod test {
         let user = Address::generate(&env);
         register_user(&env, &registry, &user, "testuser");
 
-        let bot_id = client.mint_tier(&user, &Tier::Basic);
+        let bot_id = client.mint_tier(&user, &BotTier::Basic);
         let user_bots = client.get_user_bots(&user);
 
         assert_eq!(user_bots.len(), 1);
@@ -2258,15 +2251,15 @@ mod test {
         register_user(&env, &registry, &user, "testuser");
 
         // Mint basic (free)
-        let bot_basic = client.mint_tier(&user, &Tier::Basic);
+        let bot_basic = client.mint_tier(&user, &BotTier::Basic);
 
         // Fund user and mint advanced
         fund_user(&env, &token_id, &user, 500_0000000);
-        let bot_advanced = client.mint_tier(&user, &Tier::Advanced);
+        let bot_advanced = client.mint_tier(&user, &BotTier::Bronze);
 
         // Fund user more and mint premium
         fund_user(&env, &token_id, &user, 2000_0000000);
-        let bot_premium = client.mint_tier(&user, &Tier::Premium);
+        let bot_premium = client.mint_tier(&user, &BotTier::Silver);
 
         let basic_nft = client.get_bot(&bot_basic);
         let advanced_nft = client.get_bot(&bot_advanced);
@@ -2704,7 +2697,7 @@ mod auth_tests {
         let token_id = env.register_contract(None, automint_token::AMTToken);
         let owner = Address::generate(&env);
         env.mock_auths(&[]);
-        let result = client.try_mint_tier(&owner, &Tier::Basic);
+        let result = client.try_mint_tier(&owner, &BotTier::Basic);
         assert!(result.is_err());
     }
 
@@ -2719,17 +2712,17 @@ mod auth_tests {
         client.initialize(&admin, &registry_id, &Address::generate(&env));
 
         let owner = Address::generate(&env);
-        // Tier::Basic carries a zero price, so no token transfer is required.
+        // BotTier::Basic carries a zero price, so no token transfer is required.
         env.mock_auths(&[MockAuth {
             address: &owner,
             invoke: &MockAuthInvoke {
                 contract: &id,
                 fn_name: "mint_tier",
-                args: (owner.clone(), Tier::Basic).into_val(&env),
+                args: (owner.clone(), BotTier::Basic).into_val(&env),
                 sub_invokes: &[],
             },
         }]);
-        let result = client.try_mint_tier(&owner, &Tier::Basic);
+        let result = client.try_mint_tier(&owner, &BotTier::Basic);
         assert!(result.is_ok());
     }
 
@@ -2812,9 +2805,13 @@ mod auth_tests {
         env.mock_all_auths();
         client.initialize(&admin, &registry_id, &Address::generate(&env));
 
-        // Base rate for Basic tier is 1, max allowed 2x is 2. Setting to 5 should fail.
+        // Base rate for Basic tier is 1, max allowed 2x is 2.
         let result = client.try_set_tier_rate(&BotTier::Basic, &5_u64);
-        assert_eq!(result, Err(Ok(BotNFTError::Unauthorized)));
+        assert_eq!(result, Err(Ok(BotNFTError::InvalidRate)));
+        assert_eq!(
+            client.try_set_tier_rate(&BotTier::Basic, &0_u64),
+            Err(Ok(BotNFTError::InvalidRate))
+        );
     }
 
     #[test]
@@ -3071,9 +3068,9 @@ mod registry_cross_contract_tests {
         let user = Address::generate(&env);
         let to = Address::generate(&env);
         register_user(&env, &registry, &user, "user1");
-        let price = Tier::Advanced.price();
+        let price = BotTier::Bronze.price();
         fund_user(&env, &token, &user, price);
-        client.mint_tier(&user, &Tier::Advanced);
+        client.mint_tier(&user, &BotTier::Bronze);
         assert_eq!(client.treasury_balance(&token), price);
 
         client.withdraw(&token, &to, &price);
@@ -3088,9 +3085,9 @@ mod registry_cross_contract_tests {
         let user = Address::generate(&env);
         let to = Address::generate(&env);
         register_user(&env, &registry, &user, "user1");
-        let price = Tier::Advanced.price();
+        let price = BotTier::Bronze.price();
         fund_user(&env, &token, &user, price);
-        client.mint_tier(&user, &Tier::Advanced);
+        client.mint_tier(&user, &BotTier::Bronze);
 
         assert_eq!(
             client.try_withdraw(&token, &to, &0),
@@ -3115,9 +3112,9 @@ mod registry_cross_contract_tests {
         let user = Address::generate(&env);
         let to = Address::generate(&env);
         register_user(&env, &registry, &user, "user1");
-        let price = Tier::Advanced.price();
+        let price = BotTier::Bronze.price();
         fund_user(&env, &token, &user, price);
-        client.mint_tier(&user, &Tier::Advanced);
+        client.mint_tier(&user, &BotTier::Bronze);
 
         // No auths mocked: admin.require_auth() must fail the call.
         env.mock_auths(&[]);

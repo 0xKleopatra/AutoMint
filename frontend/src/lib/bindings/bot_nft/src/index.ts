@@ -38,13 +38,6 @@ export const networks = {
   }
 } as const
 
-export enum Tier {
-  Basic = 0,
-  Advanced = 1,
-  Premium = 2,
-}
-
-
 export interface BotNFT {
   accrual_rate: u64;
   /**
@@ -125,7 +118,32 @@ export const Errors = {
   /**
    * The bot id counter has reached `u64::MAX`; no further bot can be minted.
    */
-  15: {message:"Overflow"}
+  15: {message:"Overflow"},
+
+  /**
+   * The optional per-tier mint cap has been reached.
+   */
+  16: {message:"TierSoldOut"},
+
+  /**
+   * The requested cap is below the current minted supply.
+   */
+  17: {message:"CapBelowSupply"},
+
+  /**
+   * The approval has expired.
+   */
+  18: {message:"ApprovalExpired"},
+
+  /**
+   * The caller is neither the owner, an approved spender, nor an approved operator.
+   */
+  19: {message:"NotApproved"},
+
+  /**
+   * The requested tier rate is zero or outside the permitted adjustment band.
+   */
+  20: {message:"InvalidRate"}
 }
 
 export interface StoredBotNFT {
@@ -271,9 +289,9 @@ export interface Client {
    * Construct and simulate a withdraw transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Admin-only withdrawal of accumulated tier payments (#322).
    * 
-   * `mint_tier` takes the payment token as a per-call argument (no token is
-   * stored yet), so the token to withdraw is passed explicitly. The balance
-   * is checked up front so an over-withdrawal fails before any transfer.
+   * `mint_tier` uses the payment token stored during initialization. The
+   * token address is supplied explicitly here so the balance is checked
+   * before transferring; callers should pass the configured payment token.
    */
   withdraw: ({token, to, amount}: {token: string, to: string, amount: i128}, options?: {
     /**
@@ -316,7 +334,7 @@ export interface Client {
   /**
    * Construct and simulate a mint_tier transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    */
-  mint_tier: ({owner, tier}: {owner: string, tier: Tier}, options?: {
+  mint_tier: ({owner, tier}: {owner: string, tier: BotTier}, options?: {
     /**
      * The fee to pay for the transaction. Default: BASE_FEE
      */

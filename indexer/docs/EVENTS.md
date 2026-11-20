@@ -26,8 +26,8 @@ The indexer listens to events from the **five deployed contracts**:
   and are serialized as **decimal strings** in JSON/SQLite. Listing and bot IDs
   remain text in the derived SQLite table; conversions to JS numbers reject
   values outside the safe-integer range.
-- `Tier` (bot_nft) is a `#[contracttype]` enum **without** `#[repr(u32)]`, so it
-  serializes as a **symbol** (`"Basic"`, `"Advanced"`, `"Premium"`).
+- `BotTier` (bot_nft) is a `#[contracttype]` enum, so its values serialize as
+  symbols (`"Basic"`, `"Bronze"`, `"Silver"`, `"Gold"`, `"Diamond"`).
 - Only events where `inSuccessfulContractCall == true` are indexed — events
   from reverted/failed calls are skipped.
 
@@ -58,7 +58,7 @@ new admin — same event name, different contracts.
 
 | Event | Topics (after name) | Data | Emitted in |
 |-------|---------------------|------|-----------|
-| `mint` | `[owner: Address]` | `(bot_id: u64, tier: Symbol)` | `mint_basic()` (`"Basic"`), `mint_tier()` (`"Basic"`/`"Advanced"`/`"Premium"`) |
+| `mint` | `[owner: Address]` | `(bot_id: u64, tier: Symbol)` | `mint_basic()` (`"Basic"`), `mint_tier()` (`"Basic"`/`"Bronze"`/`"Silver"`/`"Gold"`/`"Diamond"`) |
 | `transfer` | `[from: Address, to: Address]` | `bot_id: u64` | `transfer()` |
 
 ## Accrual contract

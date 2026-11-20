@@ -46,7 +46,7 @@ import type { BotTier as ContractBotTier } from "./bindings/bot_nft/src";
 // Each check fails to compile if the generated binding drifts from the domain shape.
 const _checkUserProfile: { address: string; username: string } =
   {} as ContractUserProfile;
-const _checkBotTier: string = {} as ContractBotTier;
+const _checkBotTier: ContractBotTier = {} as ContractBotTier;
 void _checkUserProfile;
 void _checkBotTier;
 
@@ -619,8 +619,40 @@ export async function getUserRank(
 }
 
 /**
- * Mint a bot of a specific tier (AM-004/AM-013).
+ * Mint a bot of a specific BotTier (AM-004/AM-013).
  *
+ * Calls `mint_tier` (not `mint` — no such method exists) and encodes `tier`
+ * as the Soroban `BotTier` enum (`ScVec([ScSymbol(tier)])`, which is how
+ * `contracttype` unit enums are XDR-encoded). The contract uses its configured
+ * payment token and applies the selected tier's price.
+ */
+export async function mintTierBot(address: string, tier: BotTier): Promise<string> {
+  return buildTxXdr(
+    CONTRACT_ADDRESSES.botNft,
+    "mint_tier",
+    [
+      nativeToScVal(address, { type: "address" }),
+      xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(tier)]),
+    ],
+    address
+  );
+}
+
+/**
+ * Cancel a marketplace listing.
+ * Returns the bot to the seller's wallet.
+ */
+export async function cancelListing(
+  userAddress: string,
+  listingId: bigint
+): Promise<string> {
+  return buildTxXdr(
+    CONTRACT_ADDRESSES.marketplace,
+    "cancel_listing",
+    [addressToScVal(userAddress), u64ToScVal(listingId)],
+    userAddress
+  );
+}
 
 /**
  * Get all active marketplace listings.
