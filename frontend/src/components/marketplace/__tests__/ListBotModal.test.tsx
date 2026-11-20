@@ -5,11 +5,18 @@ import ListBotModal from "../ListBotModal";
 import type { BotNFT } from "@/types";
 
 const mockListBotMutate = jest.fn();
+const mockMarketplaceConfig = {
+  admin: "GADMIN",
+  botNft: "GBOTNFT",
+  feeBps: 250,
+  royaltyBps: 0,
+};
 jest.mock("@/hooks/useMarketplace", () => ({
   useListBot: () => ({
     mutate: mockListBotMutate,
     isPending: false,
   }),
+  useMarketplaceConfig: () => ({ data: mockMarketplaceConfig }),
 }));
 
 // Mock modal wrapper to render inline
@@ -29,6 +36,7 @@ const MOCK_BOT: BotNFT = {
   id: 1n,
   name: "CyberBot",
   owner: "GABC1234",
+  minter: "GABC1234", // seller is the original minter → no creator royalty
   tier: "Basic",
   accrual_rate: 1n,
   minted_at: 1700000000,
@@ -38,6 +46,8 @@ const MOCK_BOT: BotNFT = {
 describe("ListBotModal (#514, #528)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockMarketplaceConfig.feeBps = 250;
+    mockMarketplaceConfig.royaltyBps = 0;
   });
 
   it("renders with a visible, programmatically associated label and help text", async () => {
@@ -80,6 +90,48 @@ describe("ListBotModal (#514, #528)", () => {
     expect(screen.getByText(/-2.5000000 XLM/i)).toBeInTheDocument();
     expect(screen.getByText(/You Receive \(97.5%\)/i)).toBeInTheDocument();
     expect(screen.getByText(/97.5000000 XLM/i)).toBeInTheDocument();
+  });
+
+  it("uses the on-chain fee_bps instead of the hardcoded 2.5%", async () => {
+    mockMarketplaceConfig.feeBps = 500; // set_fee_bps(500) → 5%
+    render(<ListBotModal bot={MOCK_BOT} isOpen={true} onClose={jest.fn()} />);
+
+    const input = screen.getByLabelText(/Listing Price/i);
+    await userEvent.type(input, "100");
+
+    expect(screen.getByText(/Marketplace Fee \(5%\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/-5.0000000 XLM/i)).toBeInTheDocument();
+    expect(screen.getByText(/You Receive \(95%\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/95.0000000 XLM/i)).toBeInTheDocument();
+  });
+
+  it("deducts royalty_bps when the seller is not the original minter", async () => {
+    mockMarketplaceConfig.feeBps = 250;
+    mockMarketplaceConfig.royaltyBps = 500; // 5% creator royalty
+    const resoldBot: BotNFT = { ...MOCK_BOT, minter: "GMINTER" };
+
+    render(<ListBotModal bot={resoldBot} isOpen={true} onClose={jest.fn()} />);
+    const input = screen.getByLabelText(/Listing Price/i);
+    await userEvent.type(input, "100");
+
+    expect(screen.getByText(/Marketplace Fee \(2.5%\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Creator Royalty \(5%\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/-5.0000000 XLM/i)).toBeInTheDocument();
+    // 100 - 2.5 fee - 5 royalty = 92.5
+    expect(screen.getByText(/You Receive \(92.5%\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/92.5000000 XLM/i)).toBeInTheDocument();
+  });
+
+  it("does not deduct royalty when the seller is the original minter", async () => {
+    mockMarketplaceConfig.feeBps = 250;
+    mockMarketplaceConfig.royaltyBps = 500;
+
+    render(<ListBotModal bot={MOCK_BOT} isOpen={true} onClose={jest.fn()} />);
+    const input = screen.getByLabelText(/Listing Price/i);
+    await userEvent.type(input, "100");
+
+    expect(screen.queryByText(/Creator Royalty/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/You Receive \(97.5%\)/i)).toBeInTheDocument();
   });
 
   it("submits valid price converted to 10^7 stroops without scale bug", async () => {

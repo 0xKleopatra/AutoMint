@@ -68,7 +68,15 @@ export class Poller {
     this.db = opts.db;
     this.config = opts.config;
     this.defaultStartLedger = opts.defaultStartLedger ?? 0;
-    this.log = opts.log ?? ((message) => console.log(`[poller] ${message}`));
+    this.log =
+      opts.log ??
+      ((message, meta) => {
+        // The meta argument carries the error on "poll iteration failed" and
+        // the fetched/inserted counts on "poll complete". Dropping it made
+        // the default production logger useless for both (#log-meta).
+        const suffix = meta === undefined ? "" : ` ${JSON.stringify(meta)}`;
+        console.log(`[poller] ${message}${suffix}`);
+      });
   }
 
   /** Last fully-processed ledger, or `null` before the first checkpoint. */

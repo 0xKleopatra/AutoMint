@@ -26,14 +26,18 @@ export default function RegistrationBanner({ onRegisterSuccess }: RegistrationBa
   const submitReasonId = `${formId}-submit-reason`;
   const networkReasonId = `${formId}-network-reason`;
 
-  // Username validation per AM-205 accessibility requirements
+  // Username validation per AM-205 accessibility requirements.
+  // `String.length` counts UTF-16 code units, but `registry.register` enforces
+  // `username.len() > 32` in UTF-8 bytes — a 20-character name with accents or
+  // emoji passes that check and then fails on-chain (surfaced misleadingly as
+  // UsernameTaken). Count encoded bytes so the form matches the contract.
   const validationError = useMemo(() => {
     const trimmed = username.trim();
     if (!trimmed) {
       return "Username is required.";
     }
-    if (trimmed.length > 32) {
-      return "Username must be 32 characters or fewer.";
+    if (new TextEncoder().encode(trimmed).length > 32) {
+      return "Username must be 32 bytes or fewer (emoji and accents count as multiple bytes).";
     }
     return null;
   }, [username]);
@@ -131,7 +135,7 @@ export default function RegistrationBanner({ onRegisterSuccess }: RegistrationBa
             </div>
 
             <p id={usernameHelpId} className="text-xs text-muted">
-              Choose a public display name on the network (1–32 characters).
+              Choose a public display name on the network (1–32 UTF-8 bytes).
             </p>
 
             {touched && validationError && (
@@ -229,7 +233,7 @@ export default function RegistrationBanner({ onRegisterSuccess }: RegistrationBa
                 role="status"
                 className="text-center text-xs text-muted"
               >
-                Please enter a valid username (1–32 characters) to register.
+                Please enter a valid username (1–32 UTF-8 bytes) to register.
               </p>
             )}
 
