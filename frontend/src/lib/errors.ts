@@ -82,6 +82,8 @@ export const CONTRACT_ERROR_MESSAGES: Readonly<
     11: message("Registration required", "This wallet must be registered before accrual can start.", "Register your wallet."),
     12: message("Accrual paused", "Accrual is frozen for this user.", "Contact support."),
     13: message("Mint limit update failed", "The token contract rejected the mint limit configuration.", "Review the limit and try again."),
+    14: message("Bot sync failed", "The bot contract could not complete the accrual sync.", "Try again later."),
+    15: message("Token admin action failed", "The token contract rejected the forwarded admin operation.", "Check the admin configuration and try again."),
   },
   marketplace: {
     1: message("Already initialized", "The marketplace has already been configured.", "Refresh the page."),

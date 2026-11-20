@@ -287,8 +287,31 @@ function parseBotTier(rawTier: unknown, context: string): BotTier {
     }
     return candidate as BotTier;
   }
+  // Soroban encodes unit enum variants as u32 discriminants (Basic=0 … Diamond=4).
+  // bot_nft test snapshots store `tier` as `{"u32": 0}`; scValToNative yields
+  // the raw number for unrecognized enums when the client lacks the ABI.
+  if (typeof rawTier === "number" && Number.isInteger(rawTier)) {
+    const name = VALID_BOT_TIERS[rawTier];
+    if (!name) {
+      throw new Error(`${context}: u32 tier discriminant ${rawTier} out of range 0–${VALID_BOT_TIERS.length - 1}`);
+    }
+    return name;
+  }
+  if (
+    rawTier !== null &&
+    typeof rawTier === "object" &&
+    "u32" in (rawTier as object) &&
+    typeof (rawTier as Record<string, unknown>).u32 === "number"
+  ) {
+    const idx = (rawTier as Record<string, unknown>).u32 as number;
+    const name = VALID_BOT_TIERS[idx];
+    if (!name) {
+      throw new Error(`${context}: u32 tier discriminant ${idx} out of range 0–${VALID_BOT_TIERS.length - 1}`);
+    }
+    return name;
+  }
   throw new Error(
-    `${context}: unexpected tier shape ${JSON.stringify(rawTier)}; expected "Gold" or ["Gold"]`
+    `${context}: unexpected tier shape ${JSON.stringify(rawTier)}; expected "Gold", ["Gold"], 0–4, or {u32: 0–4}`
   );
 }
 
@@ -299,6 +322,10 @@ export function parseBotNFT(rawData: Record<string, unknown>): BotNFT {
     id: toBigInt(rawData.id, "id"),
     nickname: rawData.nickname != null ? String(rawData.nickname) : undefined,
     owner: String(rawData.owner ?? ""),
+    // The bot struct carries `minter` (the royalty recipient). Fall back to
+    // the owner so legacy fixtures/mocks render without a phantom royalty.
+    minter:
+      rawData.minter != null ? String(rawData.minter) : String(rawData.owner ?? ""),
     tier,
     accrual_rate: toBigInt(rawData.accrual_rate, "accrual_rate"),
     minted_at: Number(toBigIntOr(rawData.minted_at, 0n, "minted_at")),
@@ -360,59 +387,34 @@ export async function getAmtDecimals(sourceAddress?: string): Promise<number> {
   return decimals;
 }
 
+/** Default listing duration: 7 days in seconds. */
+export const DEFAULT_LISTING_DURATION_SECS = BigInt(7 * 24 * 60 * 60);
+
 /**
  * Build the argument list for the marketplace's
- * `list_bot(seller: Address, bot_id: u64, price: i128, currency: Address)`.
+ * `list_bot(seller: Address, bot_id: u64, price: i128, currency: Address, duration_secs: u64)`.
  *
  * Order and ScVal types must match the Rust signature exactly — a wrong count
  * or type fails at simulation. `seller` is the address whose authorization the
  * contract requires, so it is the connected wallet; `currency` defaults to the
- * configured payment token.
+ * configured payment token; `durationSecs` defaults to 7 days.
  */
 export function buildListBotArgs(
   seller: string,
   botId: bigint,
   price: bigint,
-  currency: string = CONTRACT_ADDRESSES.token
+  currency: string = CONTRACT_ADDRESSES.token,
+  durationSecs: bigint = DEFAULT_LISTING_DURATION_SECS
 ): xdr.ScVal[] {
   return [
     addressToScVal(seller),
     u64ToScVal(botId),
     i128ToScVal(price),
     addressToScVal(currency),
+    u64ToScVal(durationSecs),
   ];
 }
 
-/**
- * List a bot on the marketplace.
- * Transfers bot to marketplace contract and creates listing.
- */
-export async function listBot(
-  userAddress: string,
-  botId: bigint,
-  price: bigint,
-  currency: string = CONTRACT_ADDRESSES.token
-): Promise<string> {
-  return buildTxXdr(
-    CONTRACT_ADDRESSES.marketplace,
-    "list_bot",
-    buildListBotArgs(userAddress, botId, price, currency),
-    userAddress
-  );
-}
-
-/**
- * Buy a bot from the marketplace.
- * Transfers AMT tokens to seller and bot to buyer.
- */
-export async function buyBot(address: string, listingId: bigint): Promise<string> {
-  return buildTxXdr(
-    CONTRACT_ADDRESSES.marketplace,
-    "buy_bot",
-    [addressToScVal(address), u64ToScVal(listingId)],
-    address
-  );
-}
 
 /**
  * Fetch the leaderboard of top users by points.
@@ -706,6 +708,39 @@ export async function getMarketStats(sourceAddress?: string): Promise<TierStats[
   }));
 }
 
+/** The marketplace's on-chain fee configuration (basis points). */
+export interface MarketplaceConfig {
+  admin: string;
+  botNft: string;
+  /** Platform fee in basis points of the sale price. */
+  feeBps: number;
+  /** Creator royalty in basis points, paid unless the seller is the minter. */
+  royaltyBps: number;
+}
+
+/**
+ * Read the marketplace `config()` — the source of truth for `fee_bps` and
+ * `royalty_bps`. Both are admin-configurable (`set_fee_bps`), so the UI must
+ * never hardcode the 2.5% default: the seller's "you receive" figure has to
+ * mirror `buy_bot`'s split exactly.
+ */
+export async function getMarketplaceConfig(
+  sourceAddress?: string
+): Promise<MarketplaceConfig> {
+  const raw = await simulateContractCall<Record<string, unknown>>(
+    CONTRACT_ADDRESSES.marketplace,
+    "config",
+    [],
+    defaultSource(sourceAddress)
+  );
+  return {
+    admin: String(raw?.admin ?? ""),
+    botNft: String(raw?.bot_nft ?? ""),
+    feeBps: Number(toBigInt(raw?.fee_bps, "fee_bps")),
+    royaltyBps: Number(toBigInt(raw?.royalty_bps, "royalty_bps")),
+  };
+}
+
 /**
  * Get marketplace listings for a specific user.
  *
@@ -749,67 +784,6 @@ export async function isRegistered(userAddress: string): Promise<boolean> {
 }
 
 /**
- * Get the total number of registered users from the registry contract.
- * Read-only simulation of the registry's `total_users` method.
- *
- * Errors propagate to the caller. A null/undefined return is not a valid
- * contract response and is treated as an error rather than silently
- * returned as 0.
- */
-export async function getTotalUsers(sourceAddress?: string): Promise<number> {
-  const result = await simulateContractCall<number | bigint>(
-    CONTRACT_ADDRESSES.registry,
-    "total_users",
-    [],
-    defaultSource(sourceAddress)
-  );
-  if (result === null || result === undefined) {
-    throw new Error("total_users returned no value");
-  }
-  return Number(result);
-}
-
-/**
- * Register a user in the registry contract.
- * State-changing — returns an XDR for the wallet to sign.
- */
-export async function registerUser(userAddress: string, username: string): Promise<string> {
-  return buildTxXdr(
-    CONTRACT_ADDRESSES.registry,
-    "register",
-    [
-      nativeToScVal(userAddress, { type: "address" }),
-      nativeToScVal(username, { type: "string" }),
-    ],
-    userAddress
-  );
-}
-
-/**
- * Mint a basic bot from the bot_nft contract.
- */
-export async function mintBasicBot(userAddress: string): Promise<string> {
-  return buildTxXdr(
-    CONTRACT_ADDRESSES.botNft,
-    "mint_basic",
-    [nativeToScVal(userAddress, { type: "address" })],
-    userAddress
-  );
-}
-
-/**
- * Bump storage TTL for a specific bot (permissionless, #397).
- * Extends the bot's persistent storage retention window.
- */
-export async function bumpBot(botId: bigint, sourceAddress?: string): Promise<string> {
-  const source = defaultSource(sourceAddress);
-  return buildTxXdr(
-    CONTRACT_ADDRESSES.botNft,
-    "bump_bot",
-    [nativeToScVal(botId, { type: "u64" })],
-    source
-  );
-}
 
 /**
  * Bump storage TTL for all bots belonging to a user (permissionless, #397).
@@ -825,41 +799,6 @@ export async function bumpUserBots(userAddress: string, sourceAddress?: string):
   );
 }
 
-/**
- * Query bot IDs by tier with contract-side paging (#398).
- */
-export async function getBotsByTier(
-  tier: BotTier,
-  page: number = 0,
-  sourceAddress?: string
-): Promise<bigint[]> {
-  const raw = await simulateContractCall(
-    CONTRACT_ADDRESSES.botNft,
-    "get_bots_by_tier",
-    [
-      nativeToScVal(tier, { type: "symbol" }),
-      nativeToScVal(page, { type: "u32" }),
-    ],
-    defaultSource(sourceAddress)
-  );
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw.map((id) => toBigInt(id, "bot_id"));
-}
-
-/**
- * Start accrual for a user in the accrual contract. The contract derives the
- * rate from the user's bots (#319).
- */
-export async function startAccrual(userAddress: string): Promise<string> {
-  return buildTxXdr(
-    CONTRACT_ADDRESSES.accrual,
-    "start_accrual",
-    [nativeToScVal(userAddress, { type: "address" })],
-    userAddress
-  );
-}
 
 /**
  * Get accrual state for a user from the accrual contract.
@@ -1197,15 +1136,6 @@ export async function getUserTotalRate(userAddress: string): Promise<bigint> {
   return toBigInt(raw, "get_user_total_rate");
 }
 
-/**
- * Return the next bot ID to be assigned by bot_nft. Use as the exclusive
- * upper bound when paginating with `getBotsRange` (#391).
- */
-export async function getNextBotId(sourceAddress?: string): Promise<bigint> {
-  const source = defaultSource(sourceAddress);
-  const raw = await simulateContractCall(CONTRACT_ADDRESSES.botNft, "next_id", [], source);
-  return toBigInt(raw, "next_id");
-}
 
 /**
  * Return up to `limit` bots (max 100) with IDs in `[startId, startId + limit)`,

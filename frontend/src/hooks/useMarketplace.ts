@@ -3,12 +3,15 @@ import {
   getActiveListings,
   getUserListings,
   getMarketStats,
+  getMarketplaceConfig,
   buildListBotArgs,
 } from "@/lib/contracts";
 import { runTxWithToasts } from "@/lib/transaction";
 import { useWalletStore, selectPublicKey } from "@/store/walletStore";
 import { nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import type { BotTier, MarketplaceListing } from "@/types";
+import type { Tier, MarketplaceListing } from "@/types";
+import { TIER_ORDER } from "@/types";
 import { pollWhenVisible } from "@/lib/polling";
 import { STALE_TIME, GC_TIME, qk } from "@/lib/queryKeys";
 import { trackStatus, newTxId } from "@/components/ui/TxStatus";
@@ -77,15 +80,20 @@ export function useMintTierBot() {
   const publicKey = useWalletStore(selectPublicKey);
 
   return useMutation({
-    mutationFn: async ({ tier }: { tier: BotTier }) => {
+    // mint_tier(owner: Address, tier: Tier) — on-chain Tier is Basic|Advanced|Premium
+    // encoded as u32 (0=Basic, 1=Bronze, 2=Silver, 3=Gold, 4=Diamond).
+    mutationFn: async ({ tier }: { tier: Tier }) => {
       if (!publicKey) throw new Error("Wallet not connected");
+
+      const tierIndex = TIER_ORDER.indexOf(tier);
+      if (tierIndex === -1) throw new Error(`Unknown tier: ${tier}`);
 
       return runTxWithToasts({
         contractId: CONTRACT_ADDRESSES.botNft,
         method: "mint_tier",
         args: [
           nativeToScVal(publicKey, { type: "address" }),
-          xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(tier)]),
+          xdr.ScVal.scvU32(tierIndex),
         ],
         sourceAddress: publicKey,
         id: "mint_tier",
@@ -123,6 +131,20 @@ export function useMarketStats() {
     refetchInterval: pollWhenVisible(),
     staleTime: STALE_TIME.SHORT,
     gcTime: GC_TIME.SHORT,
+  });
+}
+
+/**
+ * On-chain marketplace fee configuration. Fetched once per session
+ * (`STALE_TIME.STATIC`): it only changes when the admin calls `set_fee_bps`,
+ * and every fee preview must read it instead of a hardcoded 2.5%.
+ */
+export function useMarketplaceConfig() {
+  return useQuery({
+    queryKey: qk.marketplaceConfig(),
+    queryFn: () => getMarketplaceConfig(),
+    staleTime: STALE_TIME.STATIC,
+    gcTime: GC_TIME.LONG,
   });
 }
 

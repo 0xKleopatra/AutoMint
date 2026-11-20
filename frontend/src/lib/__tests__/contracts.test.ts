@@ -69,6 +69,7 @@ import {
   getUserTotalRate,
   getAllTiers,
   getAmtDecimals,
+  getMarketplaceConfig,
   UNRANKED_SENTINEL,
   parseListing,
   parseUserProfile,
@@ -959,6 +960,43 @@ describe("getAmtDecimals (#479)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// getMarketplaceConfig — on-chain fee/royalty rates for fee previews
+// ---------------------------------------------------------------------------
+describe("getMarketplaceConfig", () => {
+  it("reads config() and returns the editable fee rates in basis points", async () => {
+    mockSimulate.mockResolvedValue({
+      admin: "GADMIN",
+      bot_nft: "GBOTNFT",
+      fee_bps: 500,
+      royalty_bps: 250,
+    });
+
+    await expect(getMarketplaceConfig("GSRC")).resolves.toEqual({
+      admin: "GADMIN",
+      botNft: "GBOTNFT",
+      feeBps: 500,
+      royaltyBps: 250,
+    });
+    expect(mockSimulate).toHaveBeenCalledWith(
+      expect.any(String),
+      "config",
+      [],
+      "GSRC"
+    );
+  });
+
+  it("rejects a malformed fee rate instead of silently using 0", async () => {
+    mockSimulate.mockResolvedValue({
+      admin: "GADMIN",
+      bot_nft: "GBOTNFT",
+      fee_bps: "not-a-number",
+      royalty_bps: 0,
+    });
+    await expect(getMarketplaceConfig("GSRC")).rejects.toThrow("fee_bps");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Parse helpers and integer coercion (#484)
 //
 // Merged from the former src/lib/contracts.test.ts (#489) so contracts.ts has
@@ -1137,6 +1175,7 @@ describe("parse helpers in contracts.ts", () => {
         id: 10n,
         nickname: "Bot #10",
         owner: "GXYZ987654321",
+        minter: "GXYZ987654321",
         tier: "Gold",
         accrual_rate: 50n,
         minted_at: 1690000000,

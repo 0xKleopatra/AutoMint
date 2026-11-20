@@ -3,7 +3,7 @@
 import { useState, useMemo, useId } from "react";
 import dynamic from "next/dynamic";
 import { toast } from "sonner";
-import { useListBot } from "@/hooks/useMarketplace";
+import { useListBot, useMarketplaceConfig } from "@/hooks/useMarketplace";
 import { xlmToStroops, stroopsToXlm, XLM_DECIMALS } from "@/lib/format";
 import type { BotNFT } from "@/types";
 import clsx from "clsx";
@@ -12,9 +12,18 @@ import clsx from "clsx";
 // marketplace route's initial bundle — it's only needed once a bot is listed.
 const Modal = dynamic(() => import("@/components/ui/Modal"), { ssr: false });
 
-const FEE_PERCENT = 2.5;
-const NET_PERCENT = 100 - FEE_PERCENT;
+const BPS_DENOMINATOR = 10_000n;
 const MAX_PRICE_XLM = 100_000_000;
+
+/** `amount * bps / 10_000`, exactly as the contract's `bps_of` helper. */
+function bpsOf(amount: bigint, bps: number): bigint {
+  return (amount * BigInt(bps)) / BPS_DENOMINATOR;
+}
+
+/** Basis points as a human-readable percentage, without float noise. */
+function bpsToPercent(bps: number): number {
+  return Number((bps / 100).toFixed(2));
+}
 
 interface ListBotModalProps {
   bot: BotNFT;
@@ -26,6 +35,7 @@ export default function ListBotModal({ bot, isOpen, onClose }: ListBotModalProps
   const [priceXlm, setPriceXlm] = useState("");
   const [touched, setTouched] = useState(false);
   const listBot = useListBot();
+  const { data: config } = useMarketplaceConfig();
   const priceInputId = useId();
 
   // Validate decimal precision, minimum and maximum against AM-122 and Stellar 7 decimals
@@ -65,25 +75,35 @@ export default function ListBotModal({ bot, isOpen, onClose }: ListBotModalProps
     return { isValid: true, error: null, reason: null, stroops, num };
   }, [priceXlm]);
 
-  // Live fee breakdown computed in exact stroops matching contract base units
+  // Live fee breakdown in exact stroops, mirroring `buy_bot` on-chain:
+  // platform fee = price * fee_bps / 10_000, creator royalty = price *
+  // royalty_bps / 10_000 (paid only when the seller is not the original
+  // minter), seller payout = price - platform fee - royalty. Both rates come
+  // from the marketplace's config() so an admin `set_fee_bps` is reflected.
   const feeBreakdown = useMemo(() => {
-    if (!validation.isValid || !validation.stroops) {
+    if (!validation.isValid || !validation.stroops || !config) {
       return null;
     }
     const priceStroops = validation.stroops;
-    // Contract logic: price * 25 / 1000
-    const feeStroops = (priceStroops * 25n) / 1000n;
-    const netStroops = priceStroops - feeStroops;
+    const feeStroops = bpsOf(priceStroops, config.feeBps);
+    const payRoyalty = config.royaltyBps > 0 && (bot.minter ?? bot.owner) !== bot.owner;
+    const royaltyStroops = payRoyalty ? bpsOf(priceStroops, config.royaltyBps) : 0n;
+    const netStroops = priceStroops - feeStroops - royaltyStroops;
 
     return {
       priceStroops,
       feeStroops,
+      royaltyStroops,
       netStroops,
+      feePercent: bpsToPercent(config.feeBps),
+      royaltyPercent: payRoyalty ? bpsToPercent(config.royaltyBps) : 0,
+      netPercent: bpsToPercent(10_000 - config.feeBps - (payRoyalty ? config.royaltyBps : 0)),
       priceXlm: validation.num,
       feeXlm: stroopsToXlm(feeStroops),
+      royaltyXlm: stroopsToXlm(royaltyStroops),
       netXlm: stroopsToXlm(netStroops),
     };
-  }, [validation]);
+  }, [validation, config, bot.minter, bot.owner]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -182,11 +202,19 @@ export default function ListBotModal({ bot, isOpen, onClose }: ListBotModalProps
               <span className="font-mono text-text">{priceXlm} XLM</span>
             </div>
             <div className="mt-1.5 flex items-center justify-between text-muted text-xs sm:text-sm">
-              <span>Marketplace Fee ({FEE_PERCENT}%)</span>
+              <span>Marketplace Fee ({feeBreakdown.feePercent}%)</span>
               <span className="font-mono text-pink">-{feeBreakdown.feeXlm.toFixed(7)} XLM</span>
             </div>
+            {feeBreakdown.royaltyStroops > 0n && (
+              <div className="mt-1.5 flex items-center justify-between text-muted text-xs sm:text-sm">
+                <span>Creator Royalty ({feeBreakdown.royaltyPercent}%)</span>
+                <span className="font-mono text-pink">
+                  -{feeBreakdown.royaltyXlm.toFixed(7)} XLM
+                </span>
+              </div>
+            )}
             <div className="mt-2.5 flex items-center justify-between border-t border-liner pt-2.5 font-semibold text-text">
-              <span>You Receive ({NET_PERCENT}%)</span>
+              <span>You Receive ({feeBreakdown.netPercent}%)</span>
               <span className="font-mono text-green">{feeBreakdown.netXlm.toFixed(7)} XLM</span>
             </div>
           </div>

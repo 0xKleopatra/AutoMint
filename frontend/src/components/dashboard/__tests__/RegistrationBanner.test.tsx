@@ -84,6 +84,32 @@ describe("RegistrationBanner Form Accessibility (#528)", () => {
     );
   });
 
+  it("rejects names over 32 UTF-8 bytes even when under 32 code units", () => {
+    render(<RegistrationBanner />);
+
+    const input = screen.getByLabelText(/Username/i);
+    // 20 accented chars = 20 UTF-16 code units (passes the old check) but
+    // 40 UTF-8 bytes (registry.register rejects with InvalidUsername).
+    fireEvent.change(input, { target: { value: "é".repeat(20) } });
+
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("alert")).toHaveTextContent(/32 bytes or fewer/i);
+    expect(screen.getByRole("button", { name: /Register/i })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /Register/i }));
+    expect(mockRegisterMutate).not.toHaveBeenCalled();
+  });
+
+  it("accepts a multibyte name that is exactly 32 UTF-8 bytes", () => {
+    render(<RegistrationBanner />);
+
+    const input = screen.getByLabelText(/Username/i);
+    // 8 emoji = 16 UTF-16 code units and exactly 32 UTF-8 bytes.
+    fireEvent.change(input, { target: { value: "🙂".repeat(8) } });
+
+    expect(input).toHaveAttribute("aria-invalid", "false");
+    expect(screen.getByRole("button", { name: /Register/i })).not.toBeDisabled();
+  });
+
   describe("network mismatch (#455)", () => {
     it("disables submit and explains why", () => {
       useWalletStore.setState({ networkMismatch: true });

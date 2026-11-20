@@ -81,15 +81,6 @@ function isEventName(value: unknown): value is string {
  */
 export class DecodeError extends Error {}
 
-/** Build a stable unique event id from ledger + tx hash + index within tx. */
-export function eventId(
-  ledger: number,
-  txHash: string,
-  eventIndex: number,
-): string {
-  return `${ledger}-${txHash}-${eventIndex}`;
-}
-
 export function decodeRawEvent(
   raw: RawEvent,
 ): DecodedEvent {

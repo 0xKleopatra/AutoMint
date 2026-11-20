@@ -100,4 +100,5 @@ export const qk = {
     addresses.join(","),
   ],
   marketStats: (): QueryKey => ["marketStats"],
+  marketplaceConfig: (): QueryKey => ["marketplaceConfig"],
 } as const;
